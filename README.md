@@ -19,7 +19,7 @@ CGFN leverages a dual-pathway feature representation and dynamic gating mechanis
 
 Based on the root directory, the core assets are organized as follows:
 
-```text
+
 GFN-Peptide-Discovery/
  ├── CGFN_Dataset_Partitions.csv      # Integrated 5-level framework partition matrix
  ├── Positive.fasta                   # Raw positive pro-apoptotic peptide sequences
