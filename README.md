@@ -35,7 +35,7 @@ GFN-Peptide-Discovery/
 
 ---
 
-## ⚡ Prerequisites & Installation
+##⚡ Prerequisites & Installation
 Ensure you have a CUDA-capable environment configured. Install the clean, top-level dependencies via pip:
 git clone https://github.com/lhuanyu99-blip/GFN-Peptide-Discovery.git
 cd GFN-Peptide-Discovery
@@ -45,17 +45,21 @@ pip install -r requirements.txt
 
 ##🏋️‍♂️ Data Preparation & Feature Extraction
 1. Generating ESM-2 Embeddings
+```text
 Extract dense residue-level evolutionary representations using the pre-trained ESM-2 architecture:
 python extract_esm2_features.py --input Positive.fasta --output ./Positive_NPZ/
 python extract_esm2_features.py --input neg_candidates.fasta --output ./Negative_NPZ/
+```
+
+2. Executing Lineage Partitioning
+```text
+To recreate the structural and mutational partitions across different random seeds, execute the pipeline using the integrated matrix:
+python pipeline_cgfn_dataset.py --partitions CGFN_Dataset_Partitions.csv
+```
 
 ---
 
-2. Executing Lineage Partitioning
-To recreate the structural and mutational partitions across different random seeds, execute the pipeline using the integrated matrix:
-python pipeline_cgfn_dataset.py --partitions CGFN_Dataset_Partitions.csv
-
-🚀 Model Training & Evaluation
+##🚀 Model Training & Evaluation
 The training engine strictly isolates data partitions to prevent test-set leakage. The decision threshold of the fusion layer is automatically calibrated on Out-Of-Fold (OOF) validation sub-matrices and permanently frozen before executing blind test evaluations.
 To initiate training for a specific framework setting, adjust the target directory and random seed parameters in config.py and run:
 python model.py --config config.py
@@ -65,11 +69,15 @@ By mapping the target indices in CGFN_Dataset_Partitions.csv, you can evaluate a
 Lineage Frameworks: L_Base (Core Mutation Isolation), L_Quota (Capacity Balanced), nonMR_lineage (Hard Non-MRPEIW sub-lineage).
 Random Control Frameworks: R_Base (Standard Random Control), R_Quota (Capacity-Matched Random Control).
 
-🔮 Inference Mode (Prediction on Unseen Sequences)
+---
+
+##🔮 Inference Mode (Prediction on Unseen Sequences)
 Once models are trained, CGFN can screen novel peptide libraries. The prediction engine automatically restores the serializable pooling layers and injects the corresponding pre-calibrated validation threshold to ensure end-to-end integrity:
 python model.py --predict --test_data /path/to/novel_peptide_npz/ --output screening_results.npz
 
-🔒 Data and Code Availability Statement
+---
+
+##🔒 Data and Code Availability Statement
 Source Code & Architecture: Permanently open-sourced in this GitHub repository under the MIT License.
 Core Dataset & Splits: The raw FASTA sequence files and the master partition coordinate file (CGFN_Dataset_Partitions.csv) are archived in this repository for zero-gatekeep validation.
 Pre-trained Weights: The complete matrix of pre-trained neural network weights (.keras format) spanning all 5 evaluation levels across various random seeds are available from the corresponding author upon reasonable request, and will be formally hosted upon peer-review publication.
