@@ -142,7 +142,6 @@ class FeatureExtractorManager:
     def create_gru_feature_extractor(self, gru_model):
         print("\n=== Initializing GRU Feature Extractor ===")
         
-        # 调用静态方法
         feature_output = self.get_robust_feature_layer(gru_model, 'gru')
         
         feature_extractor = Model(
@@ -270,7 +269,6 @@ class F1Metric(tf.keras.metrics.Metric):
         self.true_positives.assign(0.)
         self.false_positives.assign(0.)
         self.false_negatives.assign(0.)
-
 
 @register_keras_serializable()
 class MinPooling1D(tf.keras.layers.Layer):
@@ -643,10 +641,6 @@ class TrainingMetricsCollector:
     def record_final_fusion_debug_samples(self, debug_samples: list):
         self.final_fusion_debug_samples = debug_samples
 
-    # =========================================================================
-    # 4. 文件保存逻辑 (CSV & JSON)
-    # =========================================================================
-
     def _save_performance_metrics_csv(self):
 
         performance_data = []
@@ -660,11 +654,10 @@ class TrainingMetricsCollector:
         
         def get_metric(m_dict, key):
             val = m_dict.get(key, 0.0)
-            # 兼容 balanced_acc / balanced_accuracy
+            # balanced_acc / balanced_accuracy
             if key == 'balanced_accuracy' and val == 0.0:
                 val = m_dict.get('balanced_acc', 0.0)
             return val
--
         for fold_metric in self.fold_metrics:
             for model_name, metrics in fold_metric['model_metrics'].items():
                 row = {
@@ -678,7 +671,7 @@ class TrainingMetricsCollector:
                     'mcc': get_metric(metrics, 'mcc'),
                     'auc_pr': get_metric(metrics, 'auc_pr'),
                     'specificity': get_metric(metrics, 'specificity'),
-                    'best_threshold': get_metric(metrics, 'best_threshold') # CV通常是0.5
+                    'best_threshold': get_metric(metrics, 'best_threshold') 
                 }
                 performance_data.append(row)
             
@@ -698,7 +691,6 @@ class TrainingMetricsCollector:
                     'best_threshold': get_metric(metrics, 'best_threshold')
                 }
                 performance_data.append(row)
--
         if self.final_metrics:
             if 'model_metrics' in self.final_metrics:
                 for model_name, metrics in self.final_metrics['model_metrics'].items():
@@ -1299,7 +1291,6 @@ class UnifiedFeatureHeatmapGenerator:
     def generate_method_comparison(self, cnn_model, gru_model, X_samples, y_samples, sample_indices=None, max_samples=5):
         pass
 
-==
 class SmartDataSplitter:
     
     def __init__(self, config: Dict):
@@ -1462,7 +1453,6 @@ def build_enhanced_gru(input_shape, config):
     )(x)
     x = BatchNormalization()(x)
     x = Dropout(0.2)(x)
-    
     
     if len(gru_units) == 1:
         # 单层双向
@@ -1981,10 +1971,8 @@ class OptimizedRatioOptimizationTrainer(RatioOptimizationTrainer):
                 else: return max(initial_lr * (decay_factor ** ((epoch - decay_start) // 8)), min_lr)
             return callbacks.LearningRateScheduler(gru_sch, verbose=0)
         else:
-            # === 修复后的 CNN Scheduler (防止负数) ===
             initial_lr = self.config.get('learning_rate', 0.001)
             def cnn_sch(epoch, lr):
-                # 动态获取最大轮次，防止 progress > 1
                 T = max(self.config.get('epochs', 50), self.config.get('final_epochs', 150))
                 min_lr = initial_lr * 0.01
                 progress = min(epoch / T, 1.0)
@@ -2255,12 +2243,18 @@ class OptimizedRatioOptimizationTrainer(RatioOptimizationTrainer):
             ]
         )
         self.fusion_model.save(os.path.join(self.model_dir, "trained_enhanced_fusion_model.keras"))
+        fusion_train_preds = self.fusion_model.predict([X_feat, cnn_noisy, gru_noisy], verbose=0)
+        if isinstance(fusion_train_preds, list): 
+            fusion_train_preds = fusion_train_preds[0]
+            
+        learned_th, learned_f1 = self._search_optimal_threshold(y_true, fusion_train_preds.flatten())
+        self.learned_optimal_threshold = learned_th
+        
         return hist
         
     def _search_optimal_threshold(self, y_true, y_pred_prob, start=0.30, end=0.70, step=0.01):
         best_th, best_f1 = 0.5, 0.0
         if np.all(np.isin(y_pred_prob, [0, 1])): return 0.5, f1_score(y_true, y_pred_prob)
-        print(f"\n🔍 Threshold Search ({start}-{end})...")
         for thresh in np.arange(start, end + step, step):
             score = f1_score(y_true, (y_pred_prob > thresh).astype(int), zero_division=0)
             if score > best_f1: best_f1, best_th = score, thresh
@@ -2286,7 +2280,6 @@ class OptimizedRatioOptimizationTrainer(RatioOptimizationTrainer):
         
         print("\n" + "="*60 + "\n🚀 Executing Final Evaluation (Hybrid Strategy)\n" + "="*60)
 
-        # 1. 基础模型预测 (CNN & GRU Ensemble)
         cnn_prob = models['conv_basic'].predict(self.X_test_fixed, verbose=0).flatten()
         final_predictions['conv_basic'] = cnn_prob
         self._analyze_cnn_reliability(self.y_test_fixed, cnn_prob)
@@ -2327,10 +2320,13 @@ class OptimizedRatioOptimizationTrainer(RatioOptimizationTrainer):
         print("-" * 60)
 
         for name, prob in targets:
-            if name == 'enhanced_fusion' and self.config.get('use_optimal_threshold', True):
-                best_thr, _ = self._search_optimal_threshold(self.y_test_fixed, prob)
-            else:
+            if name != 'enhanced_fusion':
                 best_thr = 0.5
+            else:
+                if self.config.get('use_optimal_threshold', True):
+                    best_thr = getattr(self, 'learned_optimal_threshold', 0.5)
+                else:
+                    best_thr = 0.5
             
             metrics = self._calculate_full_metrics(self.y_test_fixed, prob, best_thr)
             if name == 'enhanced_fusion': optimal_fusion_metrics = metrics
