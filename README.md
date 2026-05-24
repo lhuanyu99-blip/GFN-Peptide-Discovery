@@ -40,11 +40,15 @@ git clone https://github.com/lhuanyu99-blip/GFN-Peptide-Discovery.git
 cd GFN-Peptide-Discovery
 pip install -r requirements.txt
 
-🏋️‍♂️ Data Preparation & Feature Extraction
+---
+
+##🏋️‍♂️ Data Preparation & Feature Extraction
 1. Generating ESM-2 Embeddings
 Extract dense residue-level evolutionary representations using the pre-trained ESM-2 architecture:
 python extract_esm2_features.py --input Positive.fasta --output ./Positive_NPZ/
 python extract_esm2_features.py --input neg_candidates.fasta --output ./Negative_NPZ/
+
+---
 
 2. Executing Lineage Partitioning
 To recreate the structural and mutational partitions across different random seeds, execute the pipeline using the integrated matrix:
