@@ -32,7 +32,9 @@ GFN-Peptide-Discovery/
  ├── LICENSE                          # MIT License
  └── .gitignore                       # Git ignore file
 
-⚡ Prerequisites & Installation
+---
+
+##⚡ Prerequisites & Installation
 Ensure you have a CUDA-capable environment configured. Install the clean, top-level dependencies via pip:
 git clone https://github.com/lhuanyu99-blip/GFN-Peptide-Discovery.git
 cd GFN-Peptide-Discovery
