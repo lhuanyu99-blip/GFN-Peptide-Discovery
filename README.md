@@ -1,5 +1,7 @@
 # CGFN: Confidence-Gated Fusion Network for Robust Pro-Apoptotic Peptide Prediction
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20366846.svg)](https://doi.org/10.5281/zenodo.20366846)
+
 This repository contains the official implementation of the **Confidence-Gated Fusion Network (CGFN)**, an advanced deep learning framework designed for the precise identification of pro-apoptotic peptides and the characterization of their interactions with regulatory proteins (e.g., Bax and Bfl-1).
 
 To address sequence redundancy and evaluation bias inherent in traditional random partitioning, CGFN incorporates a strict **5-Level Evaluation Framework** driven by **Functional Mutational Lineage** logic, alongside an **Anti-Leakage Validation-Calibrated Thresholding** strategy.
@@ -89,6 +91,6 @@ python model.py --predict --test_data /path/to/novel_peptide_npz/ --output scree
 
 ##🔒 Data and Code Availability Statement
 
+Permanent Data Archive (Zenodo): The comprehensive datasets, rigorous 5-level partition matrices, and downstream AlphaFold3 structural screening results (including complex .pdb files and ranking metrics) are permanently hosted on Zenodo: https://doi.org/10.5281/zenodo.20366846.
+
 Source Code & Architecture: Permanently open-sourced in this GitHub repository under the MIT License.
-Core Dataset & Splits: The raw FASTA sequence files and the master partition coordinate file (CGFN_Dataset_Partitions.csv) are archived in this repository for zero-gatekeep validation.
-Pre-trained Weights: The complete matrix of pre-trained neural network weights (.keras format) spanning all 5 evaluation levels across various random seeds are available from the corresponding author upon reasonable request, and will be formally hosted upon peer-review publication.
