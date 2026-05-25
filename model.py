@@ -738,13 +738,6 @@ class TrainingMetricsCollector:
             csv_path = os.path.join(self.model_dir, "model_performance_metrics.csv")
             df.to_csv(csv_path, index=False, float_format='%.4f')
             print(f"✅ Comprehensive performance CSV saved to: {csv_path}")
-            
-            print("\n=== Final Performance Report (Optimal Thresholds) ===")
-            if 'phase' in df.columns:
-                print(df[df['phase']=='Final'].to_string(index=False))
-            else:
-                print(df.to_string(index=False))
-            print("=====================================================\n")
 
     def _save_training_history_csv(self):
         cv_data = []
@@ -2304,7 +2297,6 @@ class OptimizedRatioOptimizationTrainer(RatioOptimizationTrainer):
 
         if self.config.get('use_confidence_locking', True):
             lock_thresh = self.config.get('confidence_lock_threshold', 0.98)
-            print(f"  Applying Confidence Locking (Threshold: {lock_thresh})")
             locked_prob, lock_stats = self._apply_confidence_locking(
                 cnn_pred=cnn_prob, fused_pred=raw_fused_prob, y_true=self.y_test_fixed, lock_threshold=lock_thresh
             )
@@ -2331,7 +2323,6 @@ class OptimizedRatioOptimizationTrainer(RatioOptimizationTrainer):
             metrics = self._calculate_full_metrics(self.y_test_fixed, prob, best_thr)
             if name == 'enhanced_fusion': optimal_fusion_metrics = metrics
             else: optimal_model_metrics[name] = metrics
-            print(f"{name:<20} | {best_thr:.2f}       | {metrics['f1']:.4f}     | {metrics['auc']:.4f}")
 
         gate_stats = self._analyze_gate_weights(gate_info, self.y_test_fixed, cnn_prob, gru_prob)
         self.metrics_collector.record_final_metrics(optimal_model_metrics, optimal_fusion_metrics)
