@@ -1,18 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-CGFN Dataset Partitioning & 5-Level Evaluation Framework
-This pipeline automates the Functional Mutational Lineage clustering, 
-stratified partitioning, and evaluation metric generation (Table 1 & 2) 
-required for rigorous computational biology validation.
-"""
-
 import math
 import random
 import os
-import argparse
-import logging
 import difflib
 from pathlib import Path
 import pandas as pd
@@ -25,28 +16,17 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 # ==========================================
-# 1. Logging Setup
+# 1. Global Configurations and Paths
 # ==========================================
-logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger(__name__)
+# Using relative paths for GitHub compatibility
+POS_DATA_CSV = Path("./data/all_Positive.csv")
+POS_NPZ_DIR = Path("./data/Positive/")
 
-# ==========================================
-# 2. Global Configuration & Paths
-# ==========================================
-# These will be updated dynamically in main() based on argparse
-DATA_ROOT = Path("data")
-POS_DATA_CSV = DATA_ROOT / "all_Positive.csv"
-POS_NPZ_DIR = DATA_ROOT / "features" / "positive"
-
-OUT_SPLITS = DATA_ROOT / "splits_lineage"
-ANALYSIS_DIR = OUT_SPLITS / "lineage_analysis"
+OUT_SPLITS = Path("./output/splits_family62")
+ANALYSIS_DIR = OUT_SPLITS / "family_analysis"
 FAMILY_SPLIT_DIR = OUT_SPLITS / "balanced_split_62out"
 
-FAMILY_TABLE_BASE = FAMILY_SPLIT_DIR / "all_sequences_by_lineage.csv"
+FAMILY_TABLE_BASE = FAMILY_SPLIT_DIR / "all_sequences_by_family.csv"
 NONMR_TRAIN_CSV = FAMILY_SPLIT_DIR / "balanced_train_set.csv"
 NONMR_TEST_CSV = FAMILY_SPLIT_DIR / "balanced_test_set.csv"
 
@@ -58,7 +38,7 @@ DOMINANT_PREFIX = "MRPEIW"
 QUOTA_BUCKETS = {"small_1_2": 30, "medium_3_5": 25, "large_6_10": 25, "xlarge_ge11": 20}
 
 # ==========================================
-# 3. Base Utility Functions
+# 2. Utility Functions
 # ==========================================
 def write_list(p: Path, items):
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -70,14 +50,14 @@ def _read_id_seq_csv(path: Path) -> pd.DataFrame:
     cand_id = next((c for c in df.columns if "id" in c.lower()), None)
     cand_seq = next((c for c in df.columns if "seq" in c.lower()), None)
     if not cand_id: raise ValueError(f"Missing ID column in {path}")
-    if not cand_seq: raise ValueError(f"Missing seq column in {path}")
+    if not cand_seq: raise ValueError(f"Missing sequence column in {path}")
     df = df.rename(columns={cand_id: "ID", cand_seq: "seq"})
     df["ID"] = df["ID"].astype(str).str.strip()
     df["seq"] = df["seq"].astype(str).str.strip().str.upper()
     return df
 
 # ==========================================
-# 4. Functional Mutational Lineage Identification
+# 3. Lineage Identification and Allocation
 # ==========================================
 def improved_precise_family_identification(sequences: List[str]) -> Tuple[Dict, Dict, Dict]:
     n_sequences = len(sequences)
@@ -86,13 +66,13 @@ def improved_precise_family_identification(sequences: List[str]) -> Tuple[Dict, 
     mutation_info = {}  
     family_counter = 0
     
-    logger.info(f"Starting lineage identification for {n_sequences} sequences...")
+    print(f"Starting improved lineage identification for {n_sequences} sequences...")
     sorted_indices = sorted(range(n_sequences), key=lambda i: len(sequences[i]), reverse=True)
     
     for i in sorted_indices:
         if i in assigned_to_family: continue
         parent_seq = sequences[i]
-        family_id = f"lineage_{family_counter}"
+        family_id = f"family_{family_counter}"
         families[family_id].append(i)
         assigned_to_family[i] = family_id
         family_mutation_positions = set()
@@ -110,7 +90,7 @@ def improved_precise_family_identification(sequences: List[str]) -> Tuple[Dict, 
         mutation_info[family_id] = {'parent': parent_seq, 'mutation_positions': family_mutation_positions, 'size': len(families[family_id])}
         family_counter += 1
     
-    logger.info("Processing double point mutations...")
+    print("\nProcessing double-point mutations...")
     for i in range(n_sequences):
         if i in assigned_to_family: continue
         current_seq = sequences[i]
@@ -137,7 +117,7 @@ def improved_precise_family_identification(sequences: List[str]) -> Tuple[Dict, 
     remaining_indices = [i for i in range(n_sequences) if i not in assigned_to_family]
     for idx in remaining_indices:
         seq = sequences[idx]
-        family_id = f"lineage_{family_counter}"
+        family_id = f"family_{family_counter}"
         families[family_id] = [idx]
         mutation_info[family_id] = {'parent': seq, 'mutation_positions': set(), 'size': 1}
         assigned_to_family[idx] = family_id
@@ -150,19 +130,19 @@ def analyze_family_distribution(families, mutation_info, sequences, assigned_to_
     family_sizes = [len(indices) for indices in families.values()]
     total_sequences, total_families = len(sequences), len(families)
     size_groups = {
-        '1 seq': [1], '2 seqs': [2], '3-5 seqs': [3, 4, 5], 
-        '6-10 seqs': [6, 7, 8, 9, 10], '11-20 seqs': range(11, 21), 
-        '21-50 seqs': range(21, 51), '51-100 seqs': range(51, 101), 
-        '100+ seqs': range(101, 1000)
+        '1_seq': [1], '2_seqs': [2], '3-5_seqs': [3, 4, 5], 
+        '6-10_seqs': [6, 7, 8, 9, 10], '11-20_seqs': range(11, 21), 
+        '21-50_seqs': range(21, 51), '51-100_seqs': range(51, 101), 
+        '100+_seqs': range(101, 1000)
     }
     group_stats = {}
     for group_name, sizes in size_groups.items():
         families_in_group = [size for size in family_sizes if size in sizes]
         if families_in_group:
             group_stats[group_name] = {
-                'lineage_count': len(families_in_group), 
+                'family_count': len(families_in_group), 
                 'sequence_count': sum(families_in_group), 
-                'lineage_percent': len(families_in_group) / total_families * 100, 
+                'family_percent': len(families_in_group) / total_families * 100, 
                 'sequence_percent': sum(families_in_group) / total_sequences * 100
             }
     return group_stats
@@ -223,13 +203,13 @@ def complete_family_analysis_and_balanced_split(csv_file, test_size, analysis_di
     df_with_family['family_id'] = [assigned_to_family[i] for i in range(len(sequences))]
     df_with_family['family_size'] = df_with_family['family_id'].map({fid: len(idx) for fid, idx in families.items()})
     df_with_family['in_test_set'] = [i in set(test_indices) for i in range(len(sequences))]
-    df_with_family['family_num'] = df_with_family['family_id'].str.extract('(\d+)').astype(int)
+    df_with_family['family_num'] = df_with_family['family_id'].str.extract(r'(\d+)').astype(int)
     df_with_family = df_with_family.sort_values(['family_num', 'in_test_set', 'seq'], ascending=[True, False, True]).drop('family_num', axis=1)
-    df_with_family.to_csv(os.path.join(split_dir, "all_sequences_by_lineage.csv"), index=False)
+    df_with_family.to_csv(os.path.join(split_dir, "all_sequences_by_family.csv"), index=False)
     return test_indices, train_indices, allocation_details
 
 # ==========================================
-# 5. 5-Level Partitioning Module
+# 4. Five-Level Data Partitioning Module
 # ==========================================
 def assign_quota_bucket(family_size: int) -> str:
     if family_size <= 2: return "small_1_2"
@@ -240,47 +220,107 @@ def assign_quota_bucket(family_size: int) -> str:
 def max_take_from_family(family_size: int) -> int:
     return min(math.floor(family_size / 3), 15)
 
-def sample_xlarge_with_cap(df_bucket: pd.DataFrame, target_n: int, rng: random.Random) -> pd.DataFrame:
-    selected_ids, family_taken = [], {}
-    for _, row in df_bucket.sample(frac=1, random_state=rng.randint(1, 10**9)).iterrows():
-        fid, fsize = row["family_id"], int(row["family_size"])
-        if family_taken.get(fid, 0) < max_take_from_family(fsize):
-            selected_ids.append(row["ID"])
-            family_taken[fid] = family_taken.get(fid, 0) + 1
-        if len(selected_ids) >= target_n: break
-    return df_bucket[df_bucket["ID"].isin(selected_ids)].copy()
-
-def sample_bucket_with_quota(df: pd.DataFrame, rng: random.Random) -> pd.DataFrame:
+def sample_random_bucket_with_quota(df: pd.DataFrame, rng: random.Random) -> pd.DataFrame:
+    """
+    R_Quota pure random sampling logic: samples randomly within quota buckets,
+    ignoring intra-family boundaries to establish an exact size allocation.
+    Strictly locks total count to FULL_TEST_N = 100.
+    """
     df = df.copy()
     df["quota_bucket"] = df["family_size"].apply(assign_quota_bucket)
-    selected_parts, remaining_total, leftover_pool = [], FULL_TEST_N, []
+    selected_parts = []
+    remaining_total = FULL_TEST_N
+    leftover_pool = []
     
     for bucket, target_n in QUOTA_BUCKETS.items():
         bucket_df = df[df["quota_bucket"] == bucket].copy()
-        if bucket == "xlarge_ge11":
-            if len(bucket_df) > 0:
-                max_poss = sum(min(len(g), max_take_from_family(int(g["family_size"].iloc[0]))) for _, g in bucket_df.groupby("family_id"))
-                if max_poss <= target_n:
-                    chosen_ids = []
-                    for _, g in bucket_df.groupby("family_id"):
-                        chosen_ids.extend(g["ID"].tolist()[:min(len(g), max_take_from_family(int(g["family_size"].iloc[0])))])
-                    chosen = bucket_df[bucket_df["ID"].isin(chosen_ids)].copy()
-                else:
-                    chosen = sample_xlarge_with_cap(bucket_df, target_n, rng)
-            else: chosen = bucket_df.copy()
-            selected_parts.append(chosen)
-            remaining_total -= len(chosen)
-            leftover_pool.extend(bucket_df.loc[~bucket_df["ID"].isin(set(chosen["ID"].tolist())), "ID"].tolist())
-        else:
-            ids = bucket_df["ID"].tolist()
-            chosen_ids = ids if len(ids) <= target_n else rng.sample(ids, target_n)
-            chosen = bucket_df[bucket_df["ID"].isin(chosen_ids)].copy()
-            selected_parts.append(chosen)
-            remaining_total -= len(chosen)
-            leftover_pool.extend([x for x in ids if x not in set(chosen_ids)])
+        ids = bucket_df["ID"].tolist()
+        
+        chosen_ids = ids if len(ids) <= target_n else rng.sample(ids, target_n)
+        chosen = bucket_df[bucket_df["ID"].isin(chosen_ids)].copy()
+        
+        selected_parts.append(chosen)
+        remaining_total -= len(chosen)
+        leftover_pool.extend([x for x in ids if x not in set(chosen_ids)])
 
     if remaining_total > 0:
         selected_parts.append(df[df["ID"].isin(rng.sample(leftover_pool, remaining_total))].copy())
+        
+    return pd.concat(selected_parts, axis=0).drop_duplicates(subset=["ID"]).copy()
+
+def sample_lineage_bucket_with_quota(df: pd.DataFrame, rng: random.Random) -> pd.DataFrame:
+    """
+    L_Quota strict isolation algorithm:
+    1. Utilizes a randomized Subset-Sum approach to construct a strict isolation pool with zero leakage.
+    2. Transfers any numerical deficit caused by the isolation constraint to the xlarge bucket,
+       dynamically filling the total exactly to 100.
+    """
+    df = df.copy()
+    df["quota_bucket"] = df["family_size"].apply(assign_quota_bucket)
+    selected_parts = []
+    deficit = 0 # Track deficit
+    
+    strict_buckets = ["small_1_2", "medium_3_5", "large_6_10"]
+    
+    for bucket in strict_buckets:
+        target_n = QUOTA_BUCKETS[bucket]
+        bucket_df = df[df["quota_bucket"] == bucket].copy()
+        families_in_bucket = list(bucket_df.groupby("family_id"))
+        
+        best_subset = []
+        best_sum = 0
+        
+        # Subset Sum logic: try 1000 combinations to find the perfect intact family fit
+        for _ in range(1000):
+            rng.shuffle(families_in_bucket)
+            current_subset = []
+            current_sum = 0
+            for fid, group in families_in_bucket:
+                f_size = len(group)
+                if current_sum + f_size <= target_n:
+                    current_subset.extend(group["ID"].tolist())
+                    current_sum += f_size
+                if current_sum == target_n:
+                    break
+            
+            if current_sum == target_n:
+                best_subset = current_subset
+                best_sum = current_sum
+                break
+            elif current_sum > best_sum:
+                best_subset = current_subset
+                best_sum = current_sum
+        
+        chosen = bucket_df[bucket_df["ID"].isin(best_subset)].copy()
+        selected_parts.append(chosen)
+        deficit += (target_n - best_sum) # Accumulate gap from preserving intact families
+        
+    # Process xlarge_ge11: Absorb the deficit from previous buckets
+    xlarge_target = QUOTA_BUCKETS["xlarge_ge11"] + deficit
+    xlarge_df = df[df["quota_bucket"] == "xlarge_ge11"].copy()
+    
+    chosen_xlarge_ids = []
+    family_taken = {}
+    
+    shuffled_xlarge_indices = list(xlarge_df.index)
+    rng.shuffle(shuffled_xlarge_indices)
+    
+    for idx in shuffled_xlarge_indices:
+        row = xlarge_df.loc[idx]
+        fid = row["family_id"]
+        fsize = int(row["family_size"])
+        
+        # Enforce max cap of 15 per family to maintain asymmetric training gravity
+        if family_taken.get(fid, 0) < max_take_from_family(fsize):
+            chosen_xlarge_ids.append(row["ID"])
+            family_taken[fid] = family_taken.get(fid, 0) + 1
+            
+        if len(chosen_xlarge_ids) == xlarge_target:
+            break
+            
+    chosen_xlarge = xlarge_df[xlarge_df["ID"].isin(chosen_xlarge_ids)].copy()
+    selected_parts.append(chosen_xlarge)
+
     return pd.concat(selected_parts, axis=0).drop_duplicates(subset=["ID"]).copy()
 
 def build_random_splits(table_path: Path, tag_prefix: str):
@@ -296,13 +336,16 @@ def build_random_quota_splits(table_path: Path, tag_prefix: str):
     df = pd.read_csv(table_path)
     df["ID"], df["seq"] = df["ID"].astype(str).str.strip(), df["seq"].astype(str).str.strip().str.upper()
     for s in RANDOM_SEEDS:
-        test_ids_r = sample_bucket_with_quota(df, random.Random(s))["ID"].tolist()
+        test_ids_r = sample_random_bucket_with_quota(df, random.Random(s))["ID"].tolist()
         train_ids_r = [i for i in df["ID"].tolist() if i not in set(test_ids_r)]
         write_list(OUT_SPLITS / f"{tag_prefix}_random_s{s}/train_pos.txt", [str(POS_NPZ_DIR / f"feature_{i}.npz") for i in train_ids_r])
         write_list(OUT_SPLITS / f"{tag_prefix}_random_s{s}/test_pos.txt", [str(POS_NPZ_DIR / f"feature_{i}.npz") for i in test_ids_r])
 
 def build_lineage_splits(table_path: Path, tag_prefix: str):
-    """Replicates Table 1 logic: Maximize lineage diversity, 1 representative per lineage."""
+    """
+    Replicates L_Base logic: samples 1 representative sequence from as many 
+    distinct lineage families as possible. Unselected sequences go to the training set.
+    """
     df = pd.read_csv(table_path)
     df["ID"] = df["ID"].astype(str).str.strip()
     for s in RANDOM_SEEDS:
@@ -326,27 +369,42 @@ def build_lineage_quota_splits(table_path: Path, tag_prefix: str):
     df = pd.read_csv(table_path)
     df["ID"], df["seq"] = df["ID"].astype(str).str.strip(), df["seq"].astype(str).str.strip().str.upper()
     for s in RANDOM_SEEDS:
-        test_ids = sample_bucket_with_quota(df, random.Random(s))["ID"].tolist()
+        test_ids = sample_lineage_bucket_with_quota(df, random.Random(s))["ID"].tolist()
         train_ids = [i for i in df["ID"].tolist() if i not in set(test_ids)]
         write_list(OUT_SPLITS / f"{tag_prefix}_lineage_quota_s{s}/train_pos.txt", [str(POS_NPZ_DIR / f"feature_{i}.npz") for i in train_ids])
         write_list(OUT_SPLITS / f"{tag_prefix}_lineage_quota_s{s}/test_pos.txt", [str(POS_NPZ_DIR / f"feature_{i}.npz") for i in test_ids])
 
-def build_nonmr_splits():
-    tr, te = _read_id_seq_csv(NONMR_TRAIN_CSV), _read_id_seq_csv(NONMR_TEST_CSV)
-    all_valid = pd.concat([tr, te])
-    all_valid = all_valid[~all_valid["seq"].str.startswith(DOMINANT_PREFIX)].copy()
-    all_ids = all_valid["ID"].tolist()
+def build_nonmr_splits(table_path: Path):
+    """
+    OOD stress test configuration:
+    1. Removes dominant MRPEIW sequences entirely.
+    2. Enforces strict cross-lineage isolation for the remaining sequences.
+    """
+    df = pd.read_csv(table_path)
+    df["ID"], df["seq"] = df["ID"].astype(str).str.strip(), df["seq"].astype(str).str.strip().str.upper()
+    df_valid = df[~df["seq"].str.startswith(DOMINANT_PREFIX)].copy()
+    
     for s in RANDOM_SEEDS:
-        test_ids = random.Random(s).sample(all_ids, NONMR_TEST_N)
-        train_ids = [i for i in all_ids if i not in set(test_ids)]
+        rng = random.Random(s)
+        families = list(df_valid.groupby("family_id"))
+        rng.shuffle(families)
+        
+        test_ids = []
+        for fid, group in families:
+            if len(test_ids) < NONMR_TEST_N:
+                test_ids.extend(group["ID"].tolist())
+            else:
+                break
+        
+        train_ids = [i for i in df_valid["ID"].tolist() if i not in set(test_ids)]
         write_list(OUT_SPLITS / f"nonMR_lineage_s{s}/train_pos.txt", [str(POS_NPZ_DIR / f"feature_{i}.npz") for i in train_ids])
         write_list(OUT_SPLITS / f"nonMR_lineage_s{s}/test_pos.txt", [str(POS_NPZ_DIR / f"feature_{i}.npz") for i in test_ids])
 
 # ==========================================
-# 6. Zenodo Metadata Generation
+# 5. Zenodo Dataset Export Module
 # ==========================================
 def generate_zenodo_csv():
-    logger.info("📦 Compiling unified Zenodo dataset partitions...")
+    print("\n📦 Integrating Zenodo shared dataset tables...")
     df_main = pd.read_csv(FAMILY_TABLE_BASE)
     df_main.rename(columns={"sequence": "seq"}, inplace=True, errors="ignore")
     df_main["ID"] = df_main["ID"].astype(str).str.strip()
@@ -372,11 +430,11 @@ def generate_zenodo_csv():
 
     out_file = OUT_SPLITS / "CGFN_Dataset_Partitions.csv"
     df_zenodo.to_csv(out_file, index=False)
-    logger.info(f"🎉 Zenodo dataset partition table generated: {out_file.resolve()}")
+    print(f"🎉 Zenodo dataset partition table (positive data only) generated at: {out_file.resolve()}")
     return out_file
 
 # ==========================================
-# 7. Table 1 & Table 2 Analysis Module
+# 6. Table 1 & Table 2 Data Analysis Module
 # ==========================================
 def compute_fast_identity(seq1, seq2):
     s = difflib.SequenceMatcher(None, seq1, seq2)
@@ -419,7 +477,7 @@ def analyze_and_print_tables(zenodo_csv_path):
             metrics_t1['mean_length'].append(test_df['seq'].str.len().mean())
             metrics_t1['median_size'].append(test_df['family_size'].median())
             
-            # --- T2 Metrics (NN Identity & Leakage) ---
+            # --- T2 Metrics ---
             train_seqs = train_df['seq'].tolist()
             train_fams = train_df['family_id'].tolist()
             test_seqs = test_df['seq'].tolist()
@@ -465,7 +523,6 @@ def analyze_and_print_tables(zenodo_csv_path):
             for k in metrics_t2: agg_t2[k] = "N/A"
         res_t2[setting] = agg_t2
 
-    # Print T1
     labels_t1 = ["Test positives, n", "Covered lineage groups, n", "Lineage coverage, %", "MRPEIW positives, %", "non-MRPEIW positives, %", "Small-lineage positives, %", "Extra large-lineage pos, %", "Mean length", "Median lineage size"]
     keys_t1 = ['positives', 'covered_groups', 'coverage_pct', 'mrpeiw_pct', 'non_mrpeiw_pct', 'small_pct', 'xlarge_pct', 'mean_length', 'median_size']
     print(f"{'Settings':<35} | {'R_Base':<12} | {'R_Quota':<12} | {'L_Base':<12} | {'L_Quota':<12} | {'nonMR_lineage':<12}")
@@ -485,60 +542,33 @@ def analyze_and_print_tables(zenodo_csv_path):
     print("="*90)
 
 # ==========================================
-# 8. Main Entry Point
+# 7. Main Pipeline Entry Point
 # ==========================================
 def main():
-    parser = argparse.ArgumentParser(description="Run 5-level CGFN dataset partition pipeline.")
-    parser.add_argument("--data_dir", type=str, default="data", 
-                        help="Root directory containing input CSVs and features.")
-    args = parser.parse_args()
-
-    # Dynamically update global paths based on argparse
-    global DATA_ROOT, POS_DATA_CSV, POS_NPZ_DIR, OUT_SPLITS, ANALYSIS_DIR
-    global FAMILY_SPLIT_DIR, FAMILY_TABLE_BASE, NONMR_TRAIN_CSV, NONMR_TEST_CSV
-
-    DATA_ROOT = Path(args.data_dir)
-    POS_DATA_CSV = DATA_ROOT / "all_Positive.csv"
-    POS_NPZ_DIR = DATA_ROOT / "features" / "positive"
-
-    OUT_SPLITS = DATA_ROOT / "splits_lineage"
-    ANALYSIS_DIR = OUT_SPLITS / "lineage_analysis"
-    FAMILY_SPLIT_DIR = OUT_SPLITS / "balanced_split_62out"
-
-    FAMILY_TABLE_BASE = FAMILY_SPLIT_DIR / "all_sequences_by_lineage.csv"
-    NONMR_TRAIN_CSV = FAMILY_SPLIT_DIR / "balanced_train_set.csv"
-    NONMR_TEST_CSV = FAMILY_SPLIT_DIR / "balanced_test_set.csv"
-
     OUT_SPLITS.mkdir(parents=True, exist_ok=True)
     
-    logger.info("="*60)
-    logger.info("🚀 [PHASE 1] Running Functional Mutational Lineage identification and balanced allocation")
-    logger.info("="*60)
-    if not POS_DATA_CSV.exists():
-        logger.error(f"Input file not found: {POS_DATA_CSV}. Please ensure data is placed correctly.")
-        return
-        
+    print("\n" + "="*60)
+    print("🚀 [PHASE 1] Running lineage identification and balanced allocation")
+    print("="*60)
     complete_family_analysis_and_balanced_split(str(POS_DATA_CSV), FULL_TEST_N, str(ANALYSIS_DIR), str(FAMILY_SPLIT_DIR))
     
-    logger.info("="*60)
-    logger.info("🚀 [PHASE 2] Executing 5-Level Evaluation * 5 Seed Partitions")
-    logger.info("="*60)
+    print("\n" + "="*60)
+    print("🚀 [PHASE 2] Executing 5-level evaluation partitions across 5 seeds")
+    print("="*60)
     build_random_splits(FAMILY_TABLE_BASE, "base")
     build_random_quota_splits(FAMILY_TABLE_BASE, "quota")
     build_lineage_splits(FAMILY_TABLE_BASE, "base")
     build_lineage_quota_splits(FAMILY_TABLE_BASE, "quota")
-    build_nonmr_splits()
+    build_nonmr_splits(FAMILY_TABLE_BASE)
 
-    logger.info("="*60)
-    logger.info("🚀 [PHASE 3] Compiling unified Zenodo export table")
-    logger.info("="*60)
+    print("\n" + "="*60)
+    print("🚀 [PHASE 3] Aggregating comprehensive Zenodo export table")
+    print("="*60)
     zenodo_file = generate_zenodo_csv()
     
     analyze_and_print_tables(zenodo_file)
-    logger.info("✅ End-to-end pipeline execution completed successfully!")
+    print("\n✅ End-to-end pipeline execution completed successfully!")
 
 if __name__ == "__main__":
-    # Ensure absolute reproducibility for publication
-    random.seed(42) 
-    np.random.seed(42)
+    random.seed(42) # Ensure absolute reproducibility
     main()
