@@ -4,16 +4,17 @@
 
 This repository contains the official implementation of the **Confidence-Gated Fusion Network (CGFN)**, an advanced deep learning framework designed for the precise identification of pro-apoptotic peptides and the characterization of their interactions with regulatory proteins (e.g., Bax and Bfl-1).
 
-To address sequence redundancy and evaluation bias inherent in traditional random partitioning, CGFN incorporates a strict **5-Level Evaluation Framework** driven by **Functional Mutational Lineage** logic, alongside an **Anti-Leakage Validation-Calibrated Thresholding** strategy.
+To address sequence redundancy and evaluation bias inherent in traditional random partitioning, CGFN incorporates a mathematically rigorous **5-Tier Evaluation Gradient** driven by strict **Functional Mutational Lineage** isolation. 
 
 ---
 
 ## 🔬 System Architecture
 
-CGFN leverages a dual-pathway feature representation and dynamic gating mechanism:
-1. **CNN Pathway:** Extracts dense local motifs from pre-trained ESM-2 (1280-dimensional) evolutionary embeddings.
-2. **Enhanced BiGRU Pathway:** Captures long-range sequential dependencies and evolutionary trajectories using bagged bidirectional gated recurrent units stabilized by a dynamic learning rate warm-up schedule.
-3. **Confidence-Gated Fusion Layer:** Dynamically scales representation weights based on Out-Of-Fold (OOF) disagreement statistics and uncertainty priors, optimizing the decision boundary via a strict anti-leakage protocol.
+CGFN abandons conventional static ensembling in favor of a strictly orthogonal, dual-view architecture equipped with an Out-of-Distribution (OOD) aware dynamic router:
+
+1. **Evolutionary View (CNN Branch):** Extracts dense local semantic motifs directly from pre-trained ESM-2 (1280-dimensional) contextual embeddings.
+2. **Biophysical View (GRU Branch):** Captures long-range spatial topologies and physicochemical properties using 10D AAindex-based features. It employs `SpatialDropout1D` and a robust dual-pooling strategy (Global Average + Global Max) to prevent structural overfitting.
+3. **7-Dim Confidence-aware Gated Fusion:** A dynamic, logit-space arbitration mechanism. By extracting a 7-dimensional context vector (including absolute confidence, inter-expert disagreement, and OOD manifold probes), the router intelligently arbitrates between modality-specific failure modes—*evolutionary hallucinations* versus *physical rigidity*—effectively intercepting negative transfer on challenging orphan variants.
 
 ---
 
@@ -23,25 +24,23 @@ Based on the root directory, the core assets are organized as follows:
 
 ```text
 GFN-Peptide-Discovery/
+ ├── data/                            # Default directory for dataset partitions & extracted NPZ features
  ├── CGFN_Dataset_Partitions.csv      # Integrated 5-level framework partition matrix
- ├── Positive.fasta                   # Raw positive pro-apoptotic peptide sequences
- ├── neg_candidates.fasta             # Raw negative background candidate sequences
- ├── extract_esm2_features.py         # ESM-2 pre-trained embedding extraction pipeline
+ ├── extract_features/                # Scripts for ESM-2 and AAindex extraction
  ├── pipeline_cgfn_dataset.py         # Automated sequence clustering & lineage partitioner
- ├── model.py                         # Core neural architecture & Anti-leakage training engine
- ├── config.py                        # Central hyperparameter and cross-validation configuration
+ ├── model_optimized.py               # Core neural architecture & Dual-stream Meta-Learning engine
+ ├── config.py                        # Central hyperparameter configuration
  ├── requirements.txt                 # Optimized deployment dependency manifest
  ├── LICENSE                          # MIT License
- └── .gitignore                       # Git ignore file
+ └── README.md                        # Documentation
 ```
 
 ---
 
-##⚡ Prerequisites & Installation
-
-Ensure you have a CUDA-capable environment configured. Install the clean, top-level dependencies via pip:
+⚡ Prerequisites & Installation
+Ensure you have a CUDA-capable environment configured. Install the top-level dependencies via pip:
 ```text
-git clone https://github.com/lhuanyu99-blip/GFN-Peptide-Discovery.git
+git clone [https://github.com/lhuanyu99-blip/GFN-Peptide-Discovery.git](https://github.com/lhuanyu99-blip/GFN-Peptide-Discovery.git)
 cd GFN-Peptide-Discovery
 pip install -r requirements.txt
 ```
