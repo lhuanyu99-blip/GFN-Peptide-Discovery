@@ -31,102 +31,59 @@ import json
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-
-class FeatureExtractorManager:
-    
+from tensorflow.keras.losses import BinaryCrossentropy
+class FeatureExtractorManager:    
     def __init__(self):
         self.cnn_feature_extractor = None
-        self.gru_feature_extractor = None
-    
+        self.gru_feature_extractor = None 
+
     @staticmethod
     def get_robust_feature_layer(model, model_type='cnn'):
 
-        candidate_layers = []
+        target_name = f"{model_type}_feature_dense"
         
-
+        for i, layer in enumerate(model.layers):
+            if layer.name.startswith(target_name):
+                print(f"🎯 [Target Lock] Selected exact feature layer for {model_type}: {layer.name} (Index {i})")
+                return layer.output
+                
+        print(f"Warning: Exact name starting with '{target_name}' not found. Falling back to heuristics.")
+        candidate_layers = []
         for i, layer in enumerate(model.layers):
             if i == 0 or i == len(model.layers) - 1:
-                continue
-                
-            layer_output = layer.output
+                continue      
             
+            layer_output = layer.output
             if isinstance(layer_output, (list, tuple)):
                 if len(layer_output) > 0:
                     layer_output = layer_output[0]
-                    print(f"Warning: Layer {i} has multiple outputs, using first output")
                 else:
                     continue
-            
             try:
                 output_shape = layer_output.shape
             except AttributeError:
-                print(f"Warning: Layer {i} output has no shape attribute, skipping")
                 continue
-
+                
             if len(output_shape) == 2 and output_shape[-1] == 1:
                 continue
                 
             layer_type = type(layer).__name__.lower()
-            
             if model_type == 'cnn':
                 if 'dense' in layer_type and i < len(model.layers) - 2:
                     candidate_layers.append((i, layer_output, 'dense'))
-                elif 'flatten' in layer_type:
-                    candidate_layers.append((i, layer_output, 'flatten'))
-                elif 'global' in layer_type:
-                    candidate_layers.append((i, layer_output, 'pooling'))
-                    
             elif model_type == 'gru':
-                if 'global' in layer_type:
-                    candidate_layers.append((i, layer_output, 'pooling'))
-                elif 'concatenate' in layer_type:
-                    candidate_layers.append((i, layer_output, 'concat'))
-                elif 'dense' in layer_type and i < len(model.layers) - 2:
+                if 'dense' in layer_type and i < len(model.layers) - 2:
                     candidate_layers.append((i, layer_output, 'dense'))
-                elif 'add' in layer_type:
-                    candidate_layers.append((i, layer_output, 'residual'))
-        
-        if not candidate_layers:
-            print(f"Warning: No candidate layers found for {model_type}, using heuristic")
-            for i in range(max(1, len(model.layers) - 4), len(model.layers) - 1):
-                layer = model.layers[i]
-                layer_output = layer.output
-                
-                if isinstance(layer_output, (list, tuple)):
-                    if len(layer_output) > 0:
-                        layer_output = layer_output[0]
-                    else:
-                        continue
-                
-                try:
-                    output_shape = layer_output.shape
-                except AttributeError:
-                    continue
-                    
-                if len(output_shape) == 2 and output_shape[-1] == 1:
-                    continue
-                    
-                candidate_layers.append((i, layer_output, 'heuristic'))
-        
+
         if candidate_layers:
-            prioritized = []
-            for idx, output, ltype in candidate_layers:
-                if ltype in ['dense', 'pooling', 'concat', 'residual']:
-                    prioritized.append((idx, output, ltype))
-            
-            if prioritized:
-                best = max(prioritized, key=lambda x: x[0])
-            else:
-                best = max(candidate_layers, key=lambda x: x[0])
-            
-            print(f"Selected feature layer for {model_type}: layer {best[0]} ({best[2]})")
+            best = max(candidate_layers, key=lambda x: x[0])
+            print(f"Selected fallback layer for {model_type}: layer {best[0]} ({best[2]})")
             return best[1]
         else:
             raise ValueError(f"Cannot find suitable feature layer for {model_type}")
     
     def create_cnn_feature_extractor(self, cnn_model):
         print("\n=== Initializing CNN Feature Extractor ===")
-        
         feature_output = self.get_robust_feature_layer(cnn_model, 'cnn')
         
         feature_extractor = Model(
@@ -141,7 +98,6 @@ class FeatureExtractorManager:
     
     def create_gru_feature_extractor(self, gru_model):
         print("\n=== Initializing GRU Feature Extractor ===")
-        
         feature_output = self.get_robust_feature_layer(gru_model, 'gru')
         
         feature_extractor = Model(
@@ -156,7 +112,7 @@ class FeatureExtractorManager:
     
     def extract_features(self, X_data, batch_size=256, verbose=0):
         if self.cnn_feature_extractor is None or self.gru_feature_extractor is None:
-            raise ValueError(" create_xxx_feature_extractor")
+            raise ValueError("Extractors not initialized. Call create_xxx_feature_extractor first.")
         
         print("\n=== Extracting Authentic Features ===")
         print(f"Input Data Shape: {X_data.shape}")
@@ -176,40 +132,50 @@ class FeatureExtractorManager:
         return cnn_features, gru_features
     
     def _verify_feature_difference(self, cnn_features, gru_features):
-        mean_diff = np.mean(np.abs(np.mean(cnn_features, axis=0) - np.mean(gru_features, axis=0)))
-        std_diff = np.mean(np.abs(np.std(cnn_features, axis=0) - np.std(gru_features, axis=0)))
+        import numpy as np
         
-        print(f"Feature Mean Difference: {mean_diff:.6f}")
-        print(f"Feature Std Difference: {std_diff:.6f}")
+        cnn_2d = cnn_features.reshape(cnn_features.shape[0], -1)
+        gru_2d = gru_features.reshape(gru_features.shape[0], -1)
         
-        if mean_diff < 1e-6 and std_diff < 1e-6:
-            print("WARNING: CNN and GRU features are nearly identical. Placeholder tensors might still be in use!")
+        norm_cnn = np.linalg.norm(cnn_2d, axis=1) + 1e-8
+        norm_gru = np.linalg.norm(gru_2d, axis=1) + 1e-8
+
+        cosine_sim = np.sum(cnn_2d * gru_2d, axis=1) / (norm_cnn * norm_gru)
+        
+        mean_sim = np.mean(cosine_sim)
+        std_sim = np.std(cosine_sim)
+        
+        print(f"\n📊 Feature Orthogonality Analysis (Cosine Sim): {mean_sim:.4f} ± {std_sim:.4f}")
+        
+        if abs(mean_sim) > 0.7:
+            print("⚠️ WARNING: High correlation detected! Models might be learning similar manifolds.")
+        elif abs(mean_sim) > 0.4:
+            print("🟡 NOTE: Moderate feature correlation. Router relies on fine-grained disagreement.")
         else:
-            print("Distinct representations confirmed between CNN and GRU pathways.")
-    
+            print("✅ Excellent! Distinct, orthogonal representations confirmed (Low Cosine Similarity).")
+
     def save_extractors(self, save_dir):
         if self.cnn_feature_extractor is not None:
             cnn_path = os.path.join(save_dir, 'cnn_feature_extractor.keras')
             self.cnn_feature_extractor.save(cnn_path)
-            print(f"cnn feature extractor saving: {cnn_path}")
+            print(f"CNN feature extractor saved to: {cnn_path}")
         
         if self.gru_feature_extractor is not None:
             gru_path = os.path.join(save_dir, 'gru_feature_extractor.keras')
             self.gru_feature_extractor.save(gru_path)
-            print(f"GRU feature extractor saving: {gru_path}")
+            print(f"GRU feature extractor saved to: {gru_path}")
     
     def load_extractors(self, save_dir, custom_objects=None):
-
         cnn_path = os.path.join(save_dir, 'cnn_feature_extractor.keras')
         gru_path = os.path.join(save_dir, 'gru_feature_extractor.keras')
         
         if os.path.exists(cnn_path):
             self.cnn_feature_extractor = load_model(cnn_path, custom_objects=custom_objects)
-            print(f"cnn feature extractor saving: {cnn_path}")
+            print(f"CNN feature extractor loaded from: {cnn_path}")
         
         if os.path.exists(gru_path):
             self.gru_feature_extractor = load_model(gru_path, custom_objects=custom_objects)
-            print(f"GRU feature extractor saving: {gru_path}")
+            print(f"GRU feature extractor loaded from: {gru_path}")
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 tf.get_logger().setLevel('ERROR')
@@ -293,191 +259,101 @@ class StdPooling1D(tf.keras.layers.Layer):
     def get_config(self):
         config = super().get_config()
         return config
+import tensorflow as tf
+from tensorflow.keras.layers import Layer, Dense, Dropout, LayerNormalization
+from tensorflow.keras import regularizers
+from tensorflow.keras.constraints import UnitNorm
 
 @tf.keras.utils.register_keras_serializable()
-class ImprovedGatedFusionMechanism(Layer):
+class EnhancedGatedFusionMechanism(Layer):
 
-    def __init__(self, fusion_units=64, dropout_rate=0.3, gate_l2_reg=0.0005, 
-                 feature_projection_units=64, gate_activation='sigmoid',
-                 ema_alpha=0.9, ema_clip_range=0.2, use_learnable_prior=True,
-                 uncertainty_center=0.5, uncertainty_sigma=0.2,
-                 **kwargs):
+    def __init__(self, fusion_units=16, dropout_rate=0.2, gate_l2_reg=0.005, 
+                 entropy_reg_weight=0.0001, **kwargs):
         super().__init__(**kwargs)
         self.fusion_units = fusion_units
         self.dropout_rate = dropout_rate
         self.gate_l2_reg = gate_l2_reg
-        self.feature_projection_units = feature_projection_units
-        self.gate_activation = gate_activation
-        self.ema_alpha = ema_alpha
-        self.ema_clip_range = ema_clip_range
-        self.use_learnable_prior = use_learnable_prior
+        self.entropy_reg_weight = entropy_reg_weight # 保持软路由
 
-        self.uncertainty_center = tf.Variable(uncertainty_center, trainable=False, dtype=tf.float32, name='unc_center')
-        self.uncertainty_sigma = tf.Variable(uncertainty_sigma, trainable=False, dtype=tf.float32, name='unc_sigma')
-        
-        self.w_correct = tf.Variable(0.80, trainable=False, dtype=tf.float32, name='w_correct')
-        self.w_conf = tf.Variable(0.15, trainable=False, dtype=tf.float32, name='w_conf')
-        self.w_stats = tf.Variable(0.05, trainable=False, dtype=tf.float32, name='w_stats')
-        
-        self.dynamic_loss_weights = tf.Variable([1.0, 0.12, 0.06, 0.06], trainable=False, dtype=tf.float32, name='loss_weights')
-        self.training_epoch = tf.Variable(0, trainable=False, dtype=tf.int32, name='training_epoch')
-        
     def build(self, input_shape):
-        self.cnn_projection = Dense(self.feature_projection_units, activation='relu',
-                                    kernel_regularizer=regularizers.l2(self.gate_l2_reg), name='cnn_projection')
-        self.gru_projection = Dense(self.feature_projection_units, activation='relu',
-                                    kernel_regularizer=regularizers.l2(self.gate_l2_reg), name='gru_projection')
+        self.cnn_norm = LayerNormalization(epsilon=1e-6)
+        self.gru_norm = LayerNormalization(epsilon=1e-6)
         
-        self.gate_dense1 = Dense(64, activation='relu', kernel_regularizer=regularizers.l2(self.gate_l2_reg), name='gate_dense1')
-        self.gate_dense2 = Dense(32, activation='relu', kernel_regularizer=regularizers.l2(self.gate_l2_reg), name='gate_dense2')
-        self.gate_output = Dense(2, activation=self.gate_activation, kernel_regularizer=regularizers.l2(self.gate_l2_reg), name='gate_output')
+        self.cnn_proj = Dense(self.fusion_units, activation='gelu', 
+                              kernel_regularizer=regularizers.l2(self.gate_l2_reg),
+                              kernel_constraint=UnitNorm(axis=0))
+        self.gru_proj = Dense(self.fusion_units, activation='gelu', 
+                              kernel_regularizer=regularizers.l2(self.gate_l2_reg),
+                              kernel_constraint=UnitNorm(axis=0))
         
-        self.expert_dense = Dense(32, activation='relu', kernel_regularizer=regularizers.l2(self.gate_l2_reg), name='expert_dense')
-        self.expert_dropout = Dropout(self.dropout_rate, name='expert_dropout')
-        self.expert_output = Dense(1, activation='tanh', kernel_regularizer=regularizers.l2(self.gate_l2_reg), name='expert_output')
-
-        self.three_dim_fusion = Dense(2, activation='softmax', kernel_regularizer=regularizers.l2(self.gate_l2_reg * 0.5), name='three_dim_fusion')
+        self.cnn_feat_compressor = Dense(1, activation='tanh', kernel_regularizer=regularizers.l2(self.gate_l2_reg))
+        self.gru_feat_compressor = Dense(1, activation='tanh', kernel_regularizer=regularizers.l2(self.gate_l2_reg))
         
-        self.dropout1 = Dropout(self.dropout_rate)
-        self.gate_layer_norm1 = LayerNormalization(epsilon=1e-6)
-        self.gate_layer_norm2 = LayerNormalization(epsilon=1e-6)
+        self.router_drop = Dropout(self.dropout_rate)
         
-        if self.use_learnable_prior:
-            self.cnn_prior = tf.Variable(0.0, trainable=True, name='cnn_prior')
-            self.gru_prior = tf.Variable(0.0, trainable=True, name='gru_prior')
-        
-        self.cnn_weight_ema = tf.Variable(0.5, trainable=False, name='cnn_weight_ema')
-        self.gru_weight_ema = tf.Variable(0.5, trainable=False, name='gru_weight_ema')
+        self.router_dense = Dense(8, activation='gelu', kernel_regularizer=regularizers.l2(self.gate_l2_reg))
+        self.router_out = Dense(2, activation='softmax', name='expert_gate')
         
         super().build(input_shape)
 
-    def _compute_reliability_score(self, cnn_pred, gru_pred, cnn_proj, gru_proj):
-        pred_diff = tf.abs(cnn_pred - gru_pred)
-        pred_agreement = 1.0 - pred_diff
-        
-        cnn_confidence = tf.abs(cnn_pred - 0.5) * 2
-        gru_confidence = tf.abs(gru_pred - 0.5) * 2
-        
-        cnn_feat_strength = tf.reduce_mean(tf.abs(cnn_proj), axis=-1, keepdims=True)
-        gru_feat_strength = tf.reduce_mean(tf.abs(gru_proj), axis=-1, keepdims=True)
-        total_strength = cnn_feat_strength + gru_feat_strength + 1e-8
-        cnn_feat_norm = cnn_feat_strength / total_strength
-        gru_feat_norm = gru_feat_strength / total_strength
-        
-        cnn_reliability = (
-            self.w_correct * pred_agreement +
-            self.w_conf * cnn_confidence +
-            self.w_stats * cnn_feat_norm
-        )
-        gru_reliability = (
-            self.w_correct * pred_agreement +
-            self.w_conf * gru_confidence +
-            self.w_stats * gru_feat_norm
-        )
-        
-        conf_gap = gru_confidence - cnn_confidence
-        gru_reliability += 0.15 * tf.nn.relu(conf_gap)
-        cnn_reliability += 0.15 * tf.nn.relu(-conf_gap)
-        
-        return tf.clip_by_value(cnn_reliability, 0.0, 1.0), tf.clip_by_value(gru_reliability, 0.0, 1.0)
+    def _to_logits(self, p, eps=1e-7):
+        p = tf.clip_by_value(p, eps, 1.0 - eps)
+        return tf.clip_by_value(tf.math.log(p / (1.0 - p)), -8.0, 8.0)
 
     def call(self, inputs, training=False):
-        if len(inputs) != 4: raise ValueError(f"Inputs error")
         cnn_features, gru_features, cnn_pred, gru_pred = inputs
-        
         epsilon = 1e-7
         cnn_pred = tf.clip_by_value(cnn_pred, epsilon, 1.0 - epsilon)
         gru_pred = tf.clip_by_value(gru_pred, epsilon, 1.0 - epsilon)
         
-        cnn_proj = self.cnn_projection(cnn_features)
-        gru_proj = self.gru_projection(gru_features)
-        cnn_reliability, gru_reliability = self._compute_reliability_score(cnn_pred, gru_pred, cnn_proj, gru_proj)
+        h_cnn = tf.math.l2_normalize(self.cnn_proj(self.cnn_norm(cnn_features)), axis=-1)
+        h_gru = tf.math.l2_normalize(self.gru_proj(self.gru_norm(gru_features)), axis=-1)
+        cnn_feat_sum = self.cnn_feat_compressor(h_cnn)
+        gru_feat_sum = self.gru_feat_compressor(h_gru)
+            
+        cnn_logit = self._to_logits(cnn_pred)
+        gru_logit = self._to_logits(gru_pred)
+        logit_diff = tf.abs(cnn_logit - gru_logit)
         
-        combined_feat = tf.concat([cnn_proj, gru_proj], axis=-1)
-        gate_hidden = self.gate_dense1(combined_feat)
-        gate_hidden = self.gate_layer_norm1(gate_hidden)
-        gate_hidden = self.dropout1(gate_hidden, training=training)
-        gate_hidden = self.gate_dense2(gate_hidden)
-        gate_hidden = self.gate_layer_norm2(gate_hidden)
-        base_gate_weights = self.gate_output(gate_hidden)
+        cnn_conf = tf.abs(cnn_pred - 0.5) * 2.0
+        gru_conf = tf.abs(gru_pred - 0.5) * 2.0
         
-        reliability_weights = tf.concat([cnn_reliability, gru_reliability], axis=-1)
-        reliability_sum = tf.reduce_sum(reliability_weights, axis=-1, keepdims=True)
-        reliability_weights = reliability_weights / tf.maximum(reliability_sum, epsilon)
+        router_context = tf.concat([
+            cnn_logit,    
+            gru_logit,    
+            cnn_conf,     
+            gru_conf,     
+            logit_diff,   
+            cnn_feat_sum, 
+            gru_feat_sum
+        ], axis=-1)       
         
-        gate_ratio = tf.cond(self.training_epoch < 20, lambda: 0.5, lambda: 0.3)
-        combined_weights = gate_ratio * base_gate_weights + (1 - gate_ratio) * reliability_weights
-        
-        # Auto-Tuned Gaussian Uncertainty
-        disagreement = tf.abs(cnn_pred - gru_pred)
-        cnn_uncertainty = tf.exp(-tf.square(cnn_pred - self.uncertainty_center) / (2 * tf.square(self.uncertainty_sigma)))
-        
-        expert_feat = self.expert_dense(combined_feat)
-        expert_feat = self.expert_dropout(expert_feat, training=training)
-        expert_signal = self.expert_output(expert_feat) 
-        
-        adjustment = disagreement * cnn_uncertainty * 0.5 * expert_signal
-        
-        w_cnn = combined_weights[:, 0:1] - adjustment
-        w_gru = combined_weights[:, 1:2] + adjustment
-        combined_weights_adjusted = tf.concat([w_cnn, w_gru], axis=-1)
-        
-        three_dim_input = tf.concat([cnn_reliability, gru_reliability], axis=-1)
-        three_dim_weights = self.three_dim_fusion(three_dim_input)
-        final_gate_weights = combined_weights_adjusted * three_dim_weights
-        
-        bias = tf.stack([self.cnn_prior, self.gru_prior], axis=0) if self.use_learnable_prior else tf.zeros(2)
-        
-        final_gate_weights = tf.nn.softmax((tf.math.log(tf.maximum(final_gate_weights, epsilon)) + bias), axis=-1)
-
         if training:
-            cnn_weight = final_gate_weights[:, 0:1]
-            gru_weight = final_gate_weights[:, 1:2]
+            router_context = self.router_drop(router_context, training=training)
             
-            self.cnn_weight_ema.assign(self.ema_alpha * self.cnn_weight_ema + (1 - self.ema_alpha) * tf.reduce_mean(cnn_weight))
-            self.gru_weight_ema.assign(self.ema_alpha * self.gru_weight_ema + (1 - self.ema_alpha) * tf.reduce_mean(gru_weight))
-            
-            pred_agreement = 1.0 - tf.abs(cnn_pred - gru_pred)
-            should_clip = pred_agreement > 0.7
-            
-            cnn_clipped = tf.clip_by_value(cnn_weight, self.cnn_weight_ema - self.ema_clip_range, self.cnn_weight_ema + self.ema_clip_range)
-            gru_clipped = tf.clip_by_value(gru_weight, self.gru_weight_ema - self.ema_clip_range, self.gru_weight_ema + self.ema_clip_range)
-            
-            final_cnn = tf.where(should_clip, cnn_clipped, cnn_weight)
-            final_gru = tf.where(should_clip, gru_clipped, gru_weight)
-            
-            final_gate_weights = tf.concat([final_cnn, final_gru], axis=-1)
-            final_sum = tf.reduce_sum(final_gate_weights, axis=-1, keepdims=True)
-            final_gate_weights = final_gate_weights / tf.maximum(final_sum, epsilon)
+        gate_weights = self.router_out(self.router_dense(router_context)) 
+        w_cnn = gate_weights[:, 0:1]
+        w_gru = gate_weights[:, 1:2]
+        
+        if training:
+            gate_entropy = -tf.reduce_mean(tf.reduce_sum(gate_weights * tf.math.log(gate_weights + 1e-7), axis=-1))
+            self.add_loss(self.entropy_reg_weight * gate_entropy) 
+        
+        final_logit = w_cnn * cnn_logit + w_gru * gru_logit
+        final_pred = tf.math.sigmoid(final_logit)
+        
+        confidence_adj = tf.concat([cnn_conf, gru_conf], axis=-1)
+        dummy_temps = tf.ones_like(confidence_adj)
+        
+        return final_pred, gate_weights, dummy_temps, confidence_adj
 
-        fused_prediction = final_gate_weights[:, 0:1] * cnn_pred + final_gate_weights[:, 1:2] * gru_pred
-        
-        fused_prediction = tf.clip_by_value(fused_prediction, epsilon, 1.0 - epsilon)
-        
-        confidence_adj = tf.concat([
-            tf.abs(cnn_pred - 0.5) * 2,
-            tf.abs(gru_pred - 0.5) * 2
-        ], axis=-1)
-        
-        return fused_prediction, final_gate_weights, base_gate_weights, confidence_adj
-        
     def get_config(self):
         config = super().get_config()
         config.update({
-            'fusion_units': self.fusion_units,
-            'dropout_rate': self.dropout_rate,
-            'gate_l2_reg': self.gate_l2_reg,
-            'feature_projection_units': self.feature_projection_units,
-            'gate_activation': self.gate_activation,
-            'ema_alpha': self.ema_alpha,
-            'ema_clip_range': self.ema_clip_range,
-            'use_learnable_prior': self.use_learnable_prior,
-            'uncertainty_center': float(self.uncertainty_center.numpy()), # 保存当前值
-            'uncertainty_sigma': float(self.uncertainty_sigma.numpy())
+            'fusion_units': self.fusion_units, 'dropout_rate': self.dropout_rate,
+            'gate_l2_reg': self.gate_l2_reg, 'entropy_reg_weight': self.entropy_reg_weight
         })
         return config
-
-EnhancedGatedFusionMechanism = ImprovedGatedFusionMechanism
 
 def calculate_comprehensive_metrics(y_true, y_pred_classes, y_pred_proba, pos_label=1):
 
@@ -820,759 +696,259 @@ class TrainingMetricsCollector:
         
         return metrics_data
 
-class DataProcessor:
-    def __init__(self, config: Dict):
+import numpy as np
+import random
+import os
+
+class DualStreamDataProcessor:
+    def __init__(self, config: dict):
         self.config = config
-        self.random_seed = config['random_seed']
-        self.kfold_splits = config['kfold_splits']
-        random.seed(self.random_seed)
-        np.random.seed(self.random_seed)
+        random.seed(config['random_seed'])
+        np.random.seed(config['random_seed'])
         
-        print("Loading data...")
+        print("\n===(Multi-view Pipeline) ===")
         
-        train_list = config.get('train_positive_list', '')
-        test_list  = config.get('test_positive_list', '')
-        
-        if train_list and test_list:
-            print("Using text lists for positive data loading...")
-            self.real_positive_train = self._load_positive_data_from_list(train_list)
-            self.real_positive_test  = self._load_positive_data_from_list(test_list)
-        else:
-            print("Using directories for positive data loading...")
-            self.real_positive_train = self._load_positive_data_from_dir(config['train_positive_dir'])
-            self.real_positive_test  = self._load_positive_data_from_dir(config['test_positive_dir'])
-            
-        print("Positive data loaded: train set {} samples, test set {} samples".format(
-            len(self.real_positive_train), len(self.real_positive_test)))
-        
-        # Load negative data with enhanced randomness
-        self.negative_train_files = self._get_shuffled_files(config['train_negative_dir'])
-        self.negative_test_files = self._get_shuffled_files(config['test_negative_dir'])
-        print("Negative data files found: train set {} files, test set {} files".format(
-            len(self.negative_train_files), len(self.negative_test_files)))
-        
-        # Pre-load and fix test data for consistency
-        self._preload_test_data()
 
-    def _load_positive_data_from_list(self, list_path: str) -> np.ndarray:
-        """Load positive data from a txt list of npz paths (one path per line)."""
-        print(f" Load positive data: {list_path}")
-        if not list_path:
-            return np.zeros((0, 1280, 1))
-        if not os.path.exists(list_path):
-            raise FileNotFoundError(f"Positive list not found: {list_path}")
-
-        with open(list_path, "r") as f:
-            npz_files = [line.strip() for line in f if line.strip()]
+        self.pos_train_cnn, self.pos_train_gru = self._load_paired_data(
+            config['train_pos_esm'], config['train_pos_aaindex']
+        )
+        self.pos_test_cnn, self.pos_test_gru = self._load_paired_data(
+            config['test_pos_esm'], config['test_pos_aaindex']
+        )
+        print(f"✅ Positive: Train {len(self.pos_train_cnn)} 条, Test {len(self.pos_test_cnn)} 条")
         
-        positive_features = []
-        for file_path in npz_files:
-            try:
-                data = np.load(file_path)
-                feature = self._reshape_data(data[list(data.keys())[0]])
-                if feature.size > 0:
-                    positive_features.append(feature)
-            except Exception as e:
-                print(f"Failed to load positive data file {file_path}: {e}")
-                continue
-        return np.vstack(positive_features) if positive_features else np.zeros((0, 1280, 1))
+        self.neg_train_pool_esm = self._read_list(config['train_neg_esm'])
+        self.neg_train_pool_aaindex = self._read_list(config['train_neg_aaindex'])
+        assert len(self.neg_train_pool_esm) == len(self.neg_train_pool_aaindex)
+        print(f"✅ negtive: 共 {len(self.neg_train_pool_esm)} ")
 
-    def _load_negative_data_from_list(self, list_path: str, expected_size: int = 0) -> np.ndarray:
-        print(f"  load negative: {list_path}")
+        self.neg_test_cnn, self.neg_test_gru = self._load_paired_data(
+            config['test_neg_esm'], config['test_neg_aaindex']
+        )
+        
+
+        self._preload_fixed_test_set()
+
+    def _read_list(self, list_path: str) -> list:
         if not list_path or not os.path.exists(list_path):
-            return np.zeros((0, 1280, 1))
-
+            raise FileNotFoundError(f"Missing list file: {list_path}")
         with open(list_path, "r") as f:
-            npz_files = [line.strip() for line in f if line.strip()]
-            
-        if expected_size > 0 and len(npz_files) > expected_size:
-            npz_files = npz_files[:expected_size]
-            
-        negative_features = []
-        for file_path in npz_files:
+            return [line.strip() for line in f if line.strip()]
+
+    def _load_paired_data(self, esm_list_path: str, aaindex_list_path: str, indices=None):
+        esm_files = self._read_list(esm_list_path) if isinstance(esm_list_path, str) else esm_list_path
+        aa_files = self._read_list(aaindex_list_path) if isinstance(aaindex_list_path, str) else aaindex_list_path
+        
+        if indices is not None:
+            esm_files = [esm_files[i] for i in indices]
+            aa_files = [aa_files[i] for i in indices]
+
+        cnn_features, gru_features = [], []
+        
+        for esm_f, aa_f in zip(esm_files, aa_files):
             try:
-                data = np.load(file_path)
-                feature = self._reshape_data(data[list(data.keys())[0]])
-                if feature.size > 0:
-                    negative_features.append(feature)
+                data_esm = np.load(esm_f)
+                feat_esm = data_esm[list(data_esm.keys())[0]]
+                
+                if feat_esm.ndim == 1:
+                    feat_esm = feat_esm.reshape(1, 1280, 1)
+                elif feat_esm.ndim == 2:
+                    feat_esm = feat_esm.reshape(1, 1280, 1)
+                else:
+                    feat_esm = np.resize(feat_esm, (1, 1280, 1))
+                    
+                cnn_features.append(feat_esm)
+                
+                data_aa = np.load(aa_f)
+                feat_aa = data_aa['embedding'] 
+                gru_features.append(feat_aa)
+                
             except Exception as e:
-                print(f"Failed to load negative data file {file_path}: {e}")
+                print(f"data fail: {esm_f} 或 {aa_f} -> {e}")
                 continue
-        return np.vstack(negative_features) if negative_features else np.zeros((0, 1280, 1))
-    
-    def _preload_test_data(self):
-        print("Preloading test data for consistency...")
-        self.fixed_test_data = self.get_test_data()
-        print("Fixed test data loaded: {} samples".format(len(self.fixed_test_data[0])))
-    
-    def _get_shuffled_files(self, directory: str) -> List[str]:
-        files = glob.glob(os.path.join(directory, "*.npz"))
-        random.shuffle(files)
-        return files
-    
-    def _load_positive_data_from_dir(self, data_dir: str) -> np.ndarray:
-        npz_files = glob.glob(os.path.join(data_dir, "*.npz"))
-        positive_features = []
-        for file_path in npz_files:
-            try:
-                data = np.load(file_path)
-                feature = self._reshape_data(data[list(data.keys())[0]])
-                if feature.size > 0:
-                    positive_features.append(feature)
-            except Exception as e:
-                print("Failed to load positive data file {}: {}".format(file_path, e))
-                continue
-        return np.vstack(positive_features) if positive_features else np.zeros((0, 1280, 1))
-    
-    def _reshape_data(self, data: np.ndarray) -> np.ndarray:
-        if data.ndim == 1:
-            return data.reshape(1, 1280, 1)
-        elif data.ndim == 2:
-            return data.T.reshape(-1, 1280, 1) if data.shape[0] == 1280 else data.reshape(-1, 1280, 1)
-        else:
-            return np.resize(data, (-1, 1280, 1))
-    
-    def _load_negative_data(self, files: List[str], sample_size: int, use_all: bool = False) -> np.ndarray:
-        if sample_size == 0 or not files:
-            return np.zeros((0, 1280, 1))
+                
+        return cnn_features, gru_features
+
+    def get_dynamic_training_data(self, pos_multiplier=1.0):
+
+
+        n_pos = len(self.pos_train_cnn)
+        sample_size = int(n_pos * pos_multiplier)
         
-        if use_all:
-            selected_files = files
-        else:
-            sample_pool_size = min(len(files), max(sample_size * 3, 1000))
-            candidate_files = random.sample(files, sample_pool_size)
-            selected_files = random.sample(candidate_files, min(sample_size, len(candidate_files)))
+        pool_size = len(self.neg_train_pool_esm)
+        sampled_indices = random.sample(range(pool_size), min(sample_size, pool_size))
         
-        negative_features = []
-        for file_path in selected_files:
-            try:
-                data = np.load(file_path)
-                feature = self._reshape_data(data[list(data.keys())[0]])
-                if feature.size > 0:
-                    negative_features.append(feature)
-            except Exception as e:
-                print("Failed to load negative data file {}: {}".format(file_path, e))
-                continue
-        return np.vstack(negative_features) if negative_features else np.zeros((0, 1280, 1))
-    
-    def get_test_data(self) -> Tuple[np.ndarray, np.ndarray]:
-        X_test_positive = self.real_positive_test
-        y_test_positive = np.ones(X_test_positive.shape[0])
+        neg_cnn, neg_gru = self._load_paired_data(
+            self.neg_train_pool_esm, 
+            self.neg_train_pool_aaindex, 
+            indices=sampled_indices
+        )
         
-        negative_sample_size = len(X_test_positive)
+        X_cnn = np.vstack(self.pos_train_cnn + neg_cnn)
         
-        test_neg_list = self.config.get('test_negative_list', '')
-        if test_neg_list:
-            X_test_negative = self._load_negative_data_from_list(test_neg_list, expected_size=negative_sample_size)
-        else:
-            X_test_negative = self._load_negative_data(self.negative_test_files, negative_sample_size, use_all=False)
+        from tensorflow.keras.preprocessing.sequence import pad_sequences
+        raw_gru = self.pos_train_gru + neg_gru
+        X_gru = pad_sequences(raw_gru, padding='post', dtype='float32') # 补齐 0
+        
+        y = np.hstack([np.ones(n_pos), np.zeros(len(neg_cnn))])
+
+        shuffle_idx = np.random.permutation(len(y))
+        
+        X_cnn_shuffled = X_cnn[shuffle_idx]
+        X_gru_shuffled = X_gru[shuffle_idx]
+        y_shuffled = y[shuffle_idx]
+
+        try:
+            print("\n" + "="*40)
+            print(" 🔍 GRU Input Sanity Check")
+            print("="*40)
+
+            sample_col_0 = X_gru_shuffled[:100, :, 0].flatten()
+            sample_col_0 = sample_col_0[sample_col_0 != 0] # 排除 padding 的 0
+            unique_vals = np.unique(sample_col_0)
+            print(f"Unique values in GRU column 0 (sample): {unique_vals[:20]}")
             
-        y_test_negative = np.zeros(X_test_negative.shape[0])
+            if len(unique_vals) <= 22 and all(float(v).is_integer() for v in unique_vals[:5]):
+                print("⚠️ DIAGNOSIS: Column 0 appears to be categorical AA Indices (0~20). Embedding is REQUIRED.")
+            else:
+                print("✅ DIAGNOSIS: Column 0 appears to be continuous physical/encoded features. DO NOT use Embedding.")
+            print("="*40 + "\n")
+        except Exception as e:
+            print(f"Sanity Check Error: {e}")
+
+        return X_cnn_shuffled, X_gru_shuffled, y_shuffled
+
+
+    def _preload_fixed_test_set(self):
+        X_cnn = np.vstack(self.pos_test_cnn + self.neg_test_cnn)
         
-        min_samples = min(len(X_test_positive), len(X_test_negative))
-        X_test_positive = X_test_positive[:min_samples]
-        X_test_negative = X_test_negative[:min_samples]
-        y_test_positive = y_test_positive[:min_samples]
-        y_test_negative = y_test_negative[:min_samples]
+        from tensorflow.keras.preprocessing.sequence import pad_sequences
+        raw_gru = self.pos_test_gru + self.neg_test_gru
+        X_gru = pad_sequences(raw_gru, padding='post', dtype='float32')
         
-        X_test = np.vstack([X_test_positive, X_test_negative])
-        y_test = np.hstack([y_test_positive, y_test_negative])
+        y = np.hstack([np.ones(len(self.pos_test_cnn)), np.zeros(len(self.neg_test_cnn))])
         
-        print(f"Balanced test set: {len(X_test)} samples ({min_samples} positive, {min_samples} negative)")
+        self.fixed_test_data = (X_cnn, X_gru, y)
         
-        indices = np.random.permutation(len(X_test))
-        return X_test[indices], y_test[indices]
-    
-    def get_fixed_test_data(self) -> Tuple[np.ndarray, np.ndarray]:
+    def get_fixed_test_data(self):
         return self.fixed_test_data
 
-import os
-import json
-import numpy as np
-import tensorflow as tf
-import matplotlib
-matplotlib.use('Agg') 
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-import pandas as pd
-
-class UnifiedFeatureHeatmapGenerator:
-    
-    def __init__(self, model_dir: str):
-        self.model_dir = os.path.join(model_dir, "heatmaps_bib_style")
-        os.makedirs(self.model_dir, exist_ok=True)
-        self.supported_methods = ["gradient", "occlusion", "perturbation"]
-        self._setup_journal_style()
-        
-    def _setup_journal_style(self):
-        mpl.rcParams['font.family'] = 'sans-serif'
-        mpl.rcParams['font.sans-serif'] = ['Arial', 'Helvetica', 'DejaVu Sans', 'Liberation Sans']
-        mpl.rcParams['pdf.fonttype'] = 42 
-        mpl.rcParams['ps.fonttype'] = 42
-        
-        mpl.rcParams['axes.titlesize'] = 16
-        mpl.rcParams['axes.labelsize'] = 14
-        mpl.rcParams['xtick.labelsize'] = 12
-        mpl.rcParams['ytick.labelsize'] = 12
-        mpl.rcParams['legend.fontsize'] = 12
-        
-        mpl.rcParams['axes.linewidth'] = 1.5
-        mpl.rcParams['xtick.major.width'] = 1.5
-        mpl.rcParams['ytick.major.width'] = 1.5
-
-    def generate_comparison_heatmaps(self, cnn_model, gru_model, X_samples, y_samples, 
-                                   method="occlusion", max_total_samples=10):
-        print(f"\nGenerating feature heatmaps for interpretability analysis...")
-        print(f"Method: {method} | Max samples: {max_total_samples}")
-        
-        self._validate_inputs(cnn_model, gru_model, X_samples, y_samples, method)
-        selected_indices = self._select_priority_samples(
-            cnn_model, gru_model, X_samples, y_samples, max_total_samples
-        )
-        cnn_heatmaps, gru_heatmaps = self._generate_sample_heatmaps(
-            cnn_model, gru_model, X_samples, selected_indices, method
-        )
-        self._create_comparison_plots(
-            X_samples, y_samples, selected_indices, cnn_heatmaps, gru_heatmaps, method
-        )
-        self._perform_statistical_analysis(cnn_heatmaps, gru_heatmaps, method)
-        
-        print("Feature heatmaps generation completed!")
-        return cnn_heatmaps, gru_heatmaps
-    
-    def _validate_inputs(self, cnn_model, gru_model, X_samples, y_samples, method):
-        if method not in self.supported_methods: raise ValueError(f"Unsupported method: {method}")
-        if len(X_samples) != len(y_samples): raise ValueError("Samples and labels mismatch")
-        if len(X_samples) == 0: raise ValueError("Empty samples")
-    
-    def _select_priority_samples(self, cnn_model, gru_model, X_samples, y_samples, max_total_samples):
-        cnn_preds = cnn_model.predict(X_samples, verbose=0).flatten()
-        gru_preds = gru_model.predict(X_samples, verbose=0).flatten()
-        
-        cnn_binary = (cnn_preds > 0.5).astype(int)
-        gru_binary = (gru_preds > 0.5).astype(int)
-        
-        sample_types = {
-            'cnn_wrong_gru_right': (cnn_binary != y_samples) & (gru_binary == y_samples),
-            'both_correct': (cnn_binary == y_samples) & (gru_binary == y_samples),
-            'both_wrong': (cnn_binary != y_samples) & (gru_binary != y_samples),
-            'cnn_right_gru_wrong': (cnn_binary == y_samples) & (gru_binary != y_samples)
-        }
-        
-        selected_indices = []
-        priority_indices = np.where(sample_types['cnn_wrong_gru_right'])[0]
-        max_priority = max_total_samples - 3 
-        
-        if len(priority_indices) > 0:
-            num_priority = min(len(priority_indices), max_priority)
-            selected_priority = np.random.choice(priority_indices, num_priority, replace=False)
-            selected_indices.extend(selected_priority)
-            
-        for type_name in ['both_correct', 'both_wrong', 'cnn_right_gru_wrong']:
-            type_indices = np.where(sample_types[type_name])[0]
-            if len(type_indices) > 0 and len(selected_indices) < max_total_samples:
-                selected_type = np.random.choice(type_indices, 1, replace=False)
-                selected_indices.extend(selected_type)
-                
-        remaining_slots = max_total_samples - len(selected_indices)
-        if remaining_slots > 0 and len(priority_indices) > len(selected_indices):
-            unselected_priority = list(set(priority_indices) - set(selected_indices))
-            if len(unselected_priority) > 0:
-                additional_priority = np.random.choice(
-                    unselected_priority, min(remaining_slots, len(unselected_priority)), replace=False
-                )
-                selected_indices.extend(additional_priority)
-                
-        return selected_indices[:max_total_samples]
-    
-    def _generate_sample_heatmaps(self, cnn_model, gru_model, X_samples, selected_indices, method):
-        cnn_heatmaps, gru_heatmaps = [], []
-        for i, idx in enumerate(selected_indices):
-            X_sample = X_samples[idx:idx+1]
-            cnn_heatmaps.append(self._create_unified_heatmap(cnn_model, X_sample, method))
-            gru_heatmaps.append(self._create_unified_heatmap(gru_model, X_sample, method))
-        return cnn_heatmaps, gru_heatmaps
-    
-    def _create_unified_heatmap(self, model, X_sample, method):
-        if method == "gradient": return self._gradient_based_importance(model, X_sample)
-        elif method == "occlusion": return self._occlusion_based_importance(model, X_sample)
-        elif method == "perturbation": return self._perturbation_based_importance(model, X_sample)
-        else: raise ValueError(f"Unknown method: {method}")
-    
-    def _gradient_based_importance(self, model, X_sample):
-        X_sample_tensor = tf.convert_to_tensor(X_sample, dtype=tf.float32)
-        with tf.GradientTape() as tape:
-            tape.watch(X_sample_tensor)
-            predictions = model(X_sample_tensor)
-            target = predictions[:, 0]
-        gradients = tape.gradient(target, X_sample_tensor)
-        importance = tf.reduce_mean(tf.abs(gradients), axis=[0, 2])
-        importance = importance.numpy()
-        if np.max(importance) > 0: importance /= np.max(importance)
-        return importance
-    
-    def _occlusion_based_importance(self, model, X_sample, window_size=10):
-        baseline_pred = model.predict(X_sample, verbose=0)[0, 0]
-        importance_scores = np.zeros(1280)
-        for i in range(0, 1280 - window_size + 1, window_size//2):
-            X_occluded = X_sample.copy()
-            X_occluded[:, i:i+window_size, :] = 0
-            occluded_pred = model.predict(X_occluded, verbose=0)[0, 0]
-            importance = abs(baseline_pred - occluded_pred)
-            importance_scores[i:i+window_size] += importance
-        if np.max(importance_scores) > 0: importance_scores /= np.max(importance_scores)
-        return importance_scores
-    
-    def _perturbation_based_importance(self, model, X_sample, num_perturbations=100):
-        baseline_pred = model.predict(X_sample, verbose=0)[0, 0]
-        importance_scores = np.zeros(1280)
-        for _ in range(num_perturbations):
-            feature_idx = np.random.randint(0, 1280)
-            perturbation = np.random.normal(0, 0.1)
-            X_perturbed = X_sample.copy()
-            X_perturbed[:, feature_idx, :] += perturbation
-            perturbed_pred = model.predict(X_perturbed, verbose=0)[0, 0]
-            importance = abs(baseline_pred - perturbed_pred)
-            importance_scores[feature_idx] += importance
-        if np.max(importance_scores) > 0: importance_scores /= np.max(importance_scores)
-        return importance_scores
-    
-    def _create_comparison_plots(self, X_samples, y_samples, selected_indices, cnn_heatmaps, gru_heatmaps, method):
-        for i, idx in enumerate(selected_indices):
-            self._create_single_comparison_plot(i, idx, X_samples[idx], y_samples[idx], cnn_heatmaps[i], gru_heatmaps[i], method)
-    
-    def _create_single_comparison_plot(self, plot_idx, sample_idx, X_sample, y_true, cnn_heatmap, gru_heatmap, method):
-
-        feature_values = X_sample.flatten()
-        difference = cnn_heatmap - gru_heatmap
-        
-        df_sample = pd.DataFrame({
-            'Feature_Dimension': range(len(feature_values)),
-            'Original_Feature_Value': feature_values,
-            'CNN_Importance': cnn_heatmap,
-            'GRU_Importance': gru_heatmap,
-            'Absolute_Difference': np.abs(difference),
-            'Diff_Direction': ['CNN_Higher' if x > 0 else 'GRU_Higher' for x in difference]
-        })
-        csv_file = os.path.join(self.model_dir, f"OriginData_Sample_{sample_idx}_{method}.csv")
-        df_sample.to_csv(csv_file, index=False)
-
-        fig, axes = plt.subplots(2, 2, figsize=(16, 10))
-        fig.suptitle(f'Sample {sample_idx} - Feature Importance Complementarity (True Label: {y_true})', 
-                     fontsize=18, fontweight='bold', y=0.98)
-        
-        axes[0, 0].plot(feature_values, color='#404040', alpha=0.8, linewidth=1.2)
-        axes[0, 0].set_title('A. Original Feature Sequence', loc='left', fontweight='bold')
-        axes[0, 0].set_ylabel('Feature Value')
-        
-        axes[0, 1].plot(cnn_heatmap, color='#E63946', alpha=0.9, linewidth=2)
-        axes[0, 1].fill_between(range(len(cnn_heatmap)), cnn_heatmap, alpha=0.2, color='#E63946')
-        axes[0, 1].set_title('B. CNN Feature Importance', loc='left', fontweight='bold')
-        axes[0, 1].set_ylabel('Importance Score')
-        axes[0, 1].set_ylim(0, 1.05)
-        
-        axes[1, 0].plot(gru_heatmap, color='#2A9D8F', alpha=0.9, linewidth=2)
-        axes[1, 0].fill_between(range(len(gru_heatmap)), gru_heatmap, alpha=0.2, color='#2A9D8F')
-        axes[1, 0].set_title('C. GRU Feature Importance', loc='left', fontweight='bold')
-        axes[1, 0].set_xlabel('Feature Dimension')
-        axes[1, 0].set_ylabel('Importance Score')
-        axes[1, 0].set_ylim(0, 1.05)
-        
-        colors = ['#E63946' if x > 0 else '#2A9D8F' for x in difference]
-        axes[1, 1].bar(range(len(difference)), np.abs(difference), color=colors, alpha=0.7, width=2.0)
-        axes[1, 1].set_title('D. Absolute Importance Difference', loc='left', fontweight='bold')
-        axes[1, 1].set_xlabel('Feature Dimension')
-        axes[1, 1].set_ylabel('Absolute Diff (|CNN - GRU|)')
-        
-        for ax in axes.flat:
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
-            ax.grid(True, linestyle='--', alpha=0.3)
-            
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        
-        pdf_file = os.path.join(self.model_dir, f"Fig_Sample_{sample_idx}_{method}.pdf")
-        tif_file = os.path.join(self.model_dir, f"Fig_Sample_{sample_idx}_{method}.tif")
-        plt.savefig(pdf_file, format='pdf', bbox_inches='tight')
-        plt.savefig(tif_file, format='tiff', dpi=300, bbox_inches='tight')
-        plt.close()
-
-    def _perform_statistical_analysis(self, cnn_heatmaps, gru_heatmaps, method):
-        cnn_heatmaps = np.array(cnn_heatmaps)
-        gru_heatmaps = np.array(gru_heatmaps)
-        
-        correlations = []
-        for i in range(len(cnn_heatmaps)):
-            corr = np.corrcoef(cnn_heatmaps[i], gru_heatmaps[i])[0, 1]
-            if not np.isnan(corr): correlations.append(corr)
-        avg_correlation = np.mean(correlations) if correlations else 0
-        
-        overlap_scores = []
-        for i in range(len(cnn_heatmaps)):
-            cnn_top = set(np.argsort(cnn_heatmaps[i])[-256:])
-            gru_top = set(np.argsort(gru_heatmaps[i])[-256:])
-            overlap = len(cnn_top & gru_top) / 256
-            overlap_scores.append(overlap)
-        avg_overlap = np.mean(overlap_scores) if overlap_scores else 0
-        
-        stats = {
-            'method': method,
-            'avg_correlation': float(avg_correlation),
-            'avg_overlap': float(avg_overlap),
-            'complementarity_index': float(1 - avg_overlap),
-            'num_samples_analyzed': len(cnn_heatmaps),
-            'correlation_std': float(np.std(correlations)) if correlations else 0,
-            'overlap_std': float(np.std(overlap_scores)) if overlap_scores else 0
-        }
-        
-        stats_file = os.path.join(self.model_dir, f"complementarity_stats_{method}.json")
-        with open(stats_file, 'w') as f: json.dump(stats, f, indent=2)
-        
-        self._create_summary_plot(cnn_heatmaps, gru_heatmaps, stats)
-    
-    def _create_summary_plot(self, cnn_heatmaps, gru_heatmaps, stats):
-
-        avg_cnn_heatmap = np.mean(cnn_heatmaps, axis=0)
-        avg_gru_heatmap = np.mean(gru_heatmaps, axis=0)
-        
-        df_mean_importance = pd.DataFrame({
-            'Feature_Dimension': range(len(avg_cnn_heatmap)),
-            'Mean_CNN_Importance': avg_cnn_heatmap,
-            'Mean_GRU_Importance': avg_gru_heatmap
-        })
-        df_mean_importance.to_csv(os.path.join(self.model_dir, "OriginData_Mean_Importance.csv"), index=False)
-
-        correlation_dist = []
-        for i in range(len(cnn_heatmaps)):
-            corr = np.corrcoef(cnn_heatmaps[i], gru_heatmaps[i])[0, 1]
-            if not np.isnan(corr): correlation_dist.append(corr)
-            
-        df_corr = pd.DataFrame({'Pearson_Correlation': correlation_dist})
-        df_corr.to_csv(os.path.join(self.model_dir, "OriginData_Correlation_Distribution.csv"), index=False)
-
-        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-        fig.suptitle('Global Feature Importance & Model Complementarity', fontsize=18, fontweight='bold', y=1.02)
-        
-        axes[0].plot(avg_cnn_heatmap, color='#E63946', linewidth=2.5, label='CNN (Local Motifs)', alpha=0.85)
-        axes[0].plot(avg_gru_heatmap, color='#2A9D8F', linewidth=2.5, label='GRU (Global Dependencies)', alpha=0.85)
-        axes[0].set_title('A. Mean Feature Importance Distribution', loc='left', fontweight='bold')
-        axes[0].set_xlabel('Feature Dimension')
-        axes[0].set_ylabel('Mean Importance Score')
-        axes[0].legend(frameon=False, loc='upper right')
-        
-        axes[1].hist(correlation_dist, bins=12, alpha=0.7, color='#457B9D', edgecolor='white', linewidth=1.2)
-        axes[1].axvline(stats['avg_correlation'], color='#E63946', linestyle='--', linewidth=2.5,
-                       label=f"Mean Correlation: {stats['avg_correlation']:.3f}")
-        axes[1].set_title('B. CNN-GRU Correlation Distribution', loc='left', fontweight='bold')
-        axes[1].set_xlabel('Pearson Correlation Coefficient')
-        axes[1].set_ylabel('Frequency (Number of Samples)')
-        axes[1].legend(frameon=False)
-        
-        for ax in axes.flat:
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
-            ax.grid(True, linestyle='--', alpha=0.3)
-            
-        plt.tight_layout()
-        
-        pdf_file = os.path.join(self.model_dir, "Fig_Complementarity_Summary.pdf")
-        tif_file = os.path.join(self.model_dir, "Fig_Complementarity_Summary.tif")
-        plt.savefig(pdf_file, format='pdf', bbox_inches='tight')
-        plt.savefig(tif_file, format='tiff', dpi=300, bbox_inches='tight')
-        plt.close()
-
-    def generate_method_comparison(self, cnn_model, gru_model, X_samples, y_samples, sample_indices=None, max_samples=5):
-        pass
-
-class SmartDataSplitter:
-    
-    def __init__(self, config: Dict):
-        self.config = config
-        self.min_fusion_samples = config.get('min_fusion_samples', 200)
-        self.max_fusion_ratio = config.get('max_fusion_ratio', 0.3)
-        self.min_base_samples = config.get('min_base_samples', 300)
-        
-    def calculate_optimal_split(self, total_samples):
-
-        print(f"\nCalculating optimal data split for {total_samples} total samples...")
-        
-
-        required_base_samples = max(self.min_base_samples, int(total_samples * 0.5))
-        
-
-        available_fusion_samples = total_samples - required_base_samples
-        
-        if available_fusion_samples < self.min_fusion_samples:
-
-            fusion_ratio = min(self.max_fusion_ratio, self.min_fusion_samples / total_samples)
-            base_ratio = 1 - fusion_ratio
-            
-            if total_samples * fusion_ratio < self.min_fusion_samples:
-                print("Warning: Sample size too small for standard split, using cross-validation strategy")
-                fusion_ratio = 0.5  # 使用50-50分割，后续通过交叉验证增强
-        else:
-            fusion_ratio = self.config.get('fusion_train_ratio', 0.3)
-            base_ratio = 1 - fusion_ratio
-        
-        base_samples = int(total_samples * base_ratio)
-        fusion_samples = total_samples - base_samples
-        
-        print(f"Optimal split calculated:")
-        print(f"  Base model samples: {base_samples} ({base_ratio:.1%})")
-        print(f"  Fusion model samples: {fusion_samples} ({fusion_ratio:.1%})")
-        
-        return base_ratio, fusion_ratio
-
-class OptimizedDataProcessor(DataProcessor):
-    
-    def __init__(self, config: Dict):
-        super().__init__(config)
-        self.data_splitter = SmartDataSplitter(config)
-        self.use_cv_fusion = config.get('use_cv_fusion', False)
-        
-    def get_optimized_training_data(self):
-        print("\nPreparing training data...")
-        
-        X_train_real = self.real_positive_train
-        y_train_positive = np.ones(X_train_real.shape[0])
-        total_positive = len(X_train_real)
-        
-        if self.use_cv_fusion:
-            print(f"\n!!! CV Stacking Mode Activated: Utilizing Out-Of-Fold (OOF) paradigm !!!")
-            print(f"Total positive samples: {total_positive}")
-            print("Strategy: Using ALL data for both Base Models (via OOF) and Fusion Layer.")
-            
-            X_negative = self._load_negative_data(
-                self.negative_train_files, total_positive
-            )
-            y_negative = np.zeros(X_negative.shape[0])
-            
-            X_all = np.vstack([X_train_real, X_negative])
-            y_all = np.hstack([y_train_positive, y_negative])
-            
-            indices = np.random.permutation(len(X_all))
-            X_all, y_all = X_all[indices], y_all[indices]
-            
-            print(f"Total training data prepared: {len(X_all)} samples (Balanced 1:1)")
-            
-            return {
-                'mode': 'cv_stacking', 
-                'data': (X_all, y_all), 
-                'folds': self.config.get('kfold_splits', 5)
-            }
-            
-        else:
-            print("Using Legacy Split Strategy ...")
-            base_ratio, fusion_ratio = self.data_splitter.calculate_optimal_split(total_positive)
-            
-            base_count = int(total_positive * base_ratio)
-            X_base_real = X_train_real[:base_count]
-            X_fusion_real = X_train_real[base_count:]
-
-            X_base_neg = self._load_negative_data(self.negative_train_files, len(X_base_real))
-            X_fusion_neg = self._load_negative_data(
-                self.negative_train_files, len(X_fusion_real)
-            )
-            
-            X_base = np.vstack([X_base_real, X_base_neg])
-            y_base = np.hstack([np.ones(len(X_base_real)), np.zeros(len(X_base_neg))])
-            idx_b = np.random.permutation(len(X_base))
-            X_base, y_base = X_base[idx_b], y_base[idx_b]
-            
-            X_fusion = np.vstack([X_fusion_real, X_fusion_neg])
-            y_fusion = np.hstack([np.ones(len(X_fusion_real)), np.zeros(len(X_fusion_neg))])
-            idx_f = np.random.permutation(len(X_fusion))
-            X_fusion, y_fusion = X_fusion[idx_f], y_fusion[idx_f]
-            
-            return {
-                'base': (X_base, y_base),
-                'fusion': (X_fusion, y_fusion)
-            }
-    
-    def _get_cv_enhanced_data(self, X_base, y_base, X_fusion, y_fusion):
-
-        X_all = np.vstack([X_base, X_fusion])
-        y_all = np.hstack([y_base, y_fusion])
-        
-        print(f"Cross-validation enhanced fusion training with {len(X_all)} total samples")
-        
-        return {
-            'base': (X_base, y_base),
-            'fusion': (X_all, y_all),  
-            'use_cv': True
-        }
 
 def build_conv_basic_net(input_shape, config):
     inputs = Input(shape=input_shape)
-    x = Conv1D(48, 3, activation='relu')(inputs)
-    x = MaxPooling1D(2)(x)
-    x = Dropout(0.2)(x)
-    x = Conv1D(24, 3, activation='relu')(x)
-    x = MaxPooling1D(2)(x)
-    x = Dropout(0.2)(x)
-    x = Flatten()(x)
-    x = Dense(24, activation='relu', kernel_regularizer=l2(config['cnn_l2_regularization']))(x)
+
+    x = Conv1D(64, 5, padding='same', activation='gelu', kernel_regularizer=l2(config['cnn_l2_regularization']))(inputs)
+    x = BatchNormalization()(x)
+    x = MaxPooling1D(2)(x)  # 改为 2
+    x = Dropout(0.3)(x) 
+
+    x = Conv1D(32, 3, padding='same', activation='gelu', kernel_regularizer=l2(config['cnn_l2_regularization']))(x)
+    x = BatchNormalization()(x)
+    x = MaxPooling1D(2)(x)  # 改为 2
+    x = Dropout(0.3)(x)
+
+    x = Flatten()(x) 
+    x = Dense(32, activation='gelu', kernel_regularizer=l2(config['cnn_l2_regularization']), name='cnn_feature_dense')(x)
+    
     x = Dropout(config['cnn_dropout_rate'])(x)
     outputs = Dense(1, activation='sigmoid')(x)
     
+    from tensorflow.keras.losses import BinaryCrossentropy
     model = Model(inputs=inputs, outputs=outputs)
-    model.compile(loss='binary_crossentropy', 
-                 optimizer=Adam(config['cnn_learning_rate']), 
-                 metrics=['accuracy'])
+    model.compile(
+        loss=BinaryCrossentropy(label_smoothing=0.05), 
+        optimizer=Adam(config['cnn_learning_rate'], clipnorm=1.0), 
+        metrics=['accuracy']
+    )
     return model
 
-def build_enhanced_gru(input_shape, config):
+def build_enhanced_gru(input_shape, config): 
+    import tensorflow as tf
+    from tensorflow.keras.layers import Input, Bidirectional, GRU, GlobalAveragePooling1D, GlobalMaxPooling1D, Concatenate, Dense, Dropout, Embedding, Lambda, SpatialDropout1D
+    from tensorflow.keras.models import Model
+    from tensorflow.keras.losses import BinaryCrossentropy
+    from tensorflow.keras.optimizers import Adam
+    from tensorflow.keras.regularizers import l2
 
-    from tensorflow.keras.layers import Bidirectional, BatchNormalization, LSTM, MaxPooling1D
+    inputs = Input(shape=input_shape, name='gru_raw_inputs')
+    l2_reg = config.get('gru_l2_reg', 0.0001)
     
-    gru_units = config['gru_units_large'] 
-    l2_reg = config['gru_l2_reg']
+    identity_feat = Lambda(lambda x: tf.cast(x[:, :, 0], tf.int32), name='slice_identity_cast')(inputs)
+    phys_pos_feat = Lambda(lambda x: x[:, :, 1:], name='slice_phys_pos')(inputs)
     
-    inputs = Input(shape=input_shape)
+    embed_id = Embedding(input_dim=21, output_dim=4, name='aa_identity_embed')(identity_feat)
     
-
-    x = Conv1D(
-        64, 7, strides=2, padding='same', activation='relu', 
-        kernel_regularizer=l2(l2_reg), 
-        name='enhanced_conv1'
-    )(inputs)
-    x = BatchNormalization()(x)
+    x = Concatenate(axis=-1, name='concat_features')([embed_id, phys_pos_feat])
+    
+    x = SpatialDropout1D(0.2, name='spatial_dropout')(x)
+    
+    x = Bidirectional(GRU(32, return_sequences=True, dropout=0.2, 
+                          kernel_regularizer=l2(l2_reg)), name='physico_gru')(x)
+    
+    avg_pool = GlobalAveragePooling1D(name='gru_avg_pool')(x) 
+    max_pool = GlobalMaxPooling1D(name='gru_max_pool')(x)     
+    
+    x = Concatenate(axis=-1, name='concat_pooling')([avg_pool, max_pool])
+    x = Dense(32, activation='gelu', kernel_regularizer=l2(l2_reg), name='gru_feature_dense')(x)
     x = Dropout(0.2)(x)
-    
-    x = Conv1D(
-        128, 5, strides=2, padding='same', activation='relu',
-        kernel_regularizer=l2(l2_reg),
-        name='enhanced_conv2'
-    )(x)
-    x = BatchNormalization()(x)
-    x = Dropout(0.2)(x)
-    
-    if len(gru_units) == 1:
-        # 单层双向
-        gru_out = Bidirectional(LSTM(
-            gru_units[0], return_sequences=True, dropout=config['gru_dropout'],
-            kernel_regularizer=l2(l2_reg),
-            recurrent_regularizer=l2(l2_reg),
-            name='lstm_bidirectional'
-        ))(x)
-        att_units = gru_units[0] * 2
-    else:
-        x = LSTM(
-            gru_units[0], return_sequences=True, dropout=config['gru_dropout'],
-            kernel_regularizer=l2(l2_reg),
-            recurrent_regularizer=l2(l2_reg),
-            name='lstm_1'
-        )(x)
-        x = LayerNormalization(epsilon=1e-6)(x)
-        
-        gru_out = LSTM(
-            gru_units[1], return_sequences=True, dropout=config['gru_dropout'],
-            kernel_regularizer=l2(l2_reg),
-            recurrent_regularizer=l2(l2_reg),
-            name='lstm_2'
-        )(x)
-        att_units = gru_units[1]
-
-    gru_out = LayerNormalization(epsilon=1e-6)(gru_out)
-    
-    time_attention = Dense(1, activation='tanh')(gru_out)
-    time_attention = Softmax(axis=1, name='time_attention')(time_attention)
-    time_attention_output = Multiply()([gru_out, time_attention])
-    
-    feat_attention = Dense(att_units, activation='sigmoid', name='feat_attention')(time_attention_output)
-    feat_attention_output = Multiply()([time_attention_output, feat_attention])
-    
-    gru_enhanced = Add()([gru_out, feat_attention_output])
-    
-    avg_pool = GlobalAveragePooling1D()(gru_enhanced)
-    max_pool = GlobalMaxPooling1D()(gru_enhanced)
-    
-    concatenated = Concatenate()([avg_pool, max_pool])
-    concatenated = BatchNormalization()(concatenated)
-    
-    x = Dense(
-        64, activation='relu', 
-        kernel_regularizer=l2(l2_reg),
-        name='class_dense1'
-    )(concatenated)
-    x = Dropout(0.3)(x)
-    
     outputs = Dense(1, activation='sigmoid')(x)
     
     model = Model(inputs=inputs, outputs=outputs, name='enhanced_gru')
-    
     model.compile(
-        loss='binary_crossentropy',
-        optimizer=Adam(
-            learning_rate=config.get('gru_initial_lr', 0.001), 
-            clipnorm=1.0
-        ),
+        loss=BinaryCrossentropy(label_smoothing=0.05),
+        optimizer=Adam(learning_rate=config.get('gru_initial_lr', 0.0005), clipnorm=1.0), 
         metrics=['accuracy']
     )
-    
     return model
 
-def build_enhanced_fusion_model(input_shape, config, cnn_model, gru_model):
-    raw_inputs = Input(shape=input_shape, name='raw_inputs')
-    cnn_pred_input = Input(shape=(1,), name='cnn_pred_input')
-    gru_pred_input = Input(shape=(1,), name='gru_pred_input')
-    
+def build_enhanced_fusion_model(cnn_input_shape, gru_input_shape, config, cnn_model, gru_model):
+
+    in_cnn = Input(shape=cnn_input_shape, name='cnn_raw_inputs')
+    in_gru = Input(shape=gru_input_shape, name='gru_raw_inputs')
+    in_c_pred = Input(shape=(1,), name='cnn_pred_input')
+    in_g_pred = Input(shape=(1,), name='gru_pred_input')
+
     cnn_model.trainable = False
     gru_model.trainable = False
     
-    cnn_feature_output = FeatureExtractorManager.get_robust_feature_layer(cnn_model, 'cnn')
-    cnn_feature_extractor = Model(inputs=cnn_model.input, outputs=cnn_feature_output)
+    cnn_feat_out = FeatureExtractorManager.get_robust_feature_layer(cnn_model, 'cnn')
+    cnn_ext = Model(inputs=cnn_model.input, outputs=cnn_feat_out)
     
-    gru_feature_output = FeatureExtractorManager.get_robust_feature_layer(gru_model, 'gru')
-    gru_feature_extractor = Model(inputs=gru_model.input, outputs=gru_feature_output)
+    gru_feat_out = FeatureExtractorManager.get_robust_feature_layer(gru_model, 'gru')
+    gru_ext = Model(inputs=gru_model.input, outputs=gru_feat_out)
     
-    cnn_features = cnn_feature_extractor(raw_inputs)
-    gru_features = gru_feature_extractor(raw_inputs)
-
-    def adapt_feature_dim(feature, target_dim, name):
-        if feature.shape[-1] != target_dim:
-            return Dense(target_dim, activation='relu', name=f'{name}_dim_adapt')(feature)
-        return feature
-    
-    cnn_dim = cnn_features.shape[-1]
-    gru_features = adapt_feature_dim(gru_features, cnn_dim, 'gru')
+    cnn_features = cnn_ext(in_cnn)
+    gru_features = gru_ext(in_gru)
 
     fusion_layer = EnhancedGatedFusionMechanism(
-        fusion_units=config.get('fusion_units', 64),
+        fusion_units=config.get('fusion_units', 32),
         dropout_rate=config.get('fusion_dropout', 0.3),
-        gate_l2_reg=config.get('gate_l2_reg', 0.0005),
-        feature_projection_units=config.get('feature_projection_units', 64),
-        gate_activation=config.get('gate_activation', 'sigmoid'),
-        ema_alpha=config.get('ema_alpha', 0.9),
-        ema_clip_range=config.get('ema_clip_range', 0.2),
-        use_learnable_prior=config.get('use_learnable_prior', True),
-        uncertainty_center=config.get('uncertainty_center', 0.5), 
-        uncertainty_sigma=config.get('uncertainty_sigma', 0.2)
+        gate_l2_reg=config.get('gate_l2_reg', 0.0005)
     )
 
-    fused_prediction, final_gate_weights, base_gate_weights, confidence_adjustment = fusion_layer([
-        cnn_features, gru_features, cnn_pred_input, gru_pred_input
+    fused_prediction, final_gate_weights, base_gate_weights, confidence_adj = fusion_layer([
+        cnn_features, gru_features, in_c_pred, in_g_pred
     ])
     
     classification_output = Activation('linear', name='classification_output')(fused_prediction)
 
     fusion_model = Model(
-        inputs=[raw_inputs, cnn_pred_input, gru_pred_input],
+        inputs=[in_cnn, in_gru, in_c_pred, in_g_pred],
         outputs=[
             classification_output, 
             final_gate_weights, 
             base_gate_weights, 
-            confidence_adjustment
+            confidence_adj
         ],
         name='enhanced_fusion_model'
     )
-
     return fusion_model
 
 class RatioOptimizationTrainer:
     def __init__(self, config: dict):
         self.config = config
-        self.data_processor = DataProcessor(config)
+        self.data_processor = None 
+        
         self.model_dir = config['model_dir']
         os.makedirs(self.model_dir, exist_ok=True)
         self.verbose = config['verbose']
@@ -1582,41 +958,71 @@ class RatioOptimizationTrainer:
         self.model_names = {'conv': 'conv_basic', 'gru': 'optimized_gru'}
         self.model_builders = {
             'conv_basic': lambda shape: build_conv_basic_net(shape, self.config),
-            'optimized_gru': lambda shape: build_optimized_gru(shape, self.config)
+            'optimized_gru': lambda shape: build_enhanced_gru(shape, self.config) 
         }
         
         self.trained_models = {}
-
-        # Initialize metrics collector
         self.metrics_collector = TrainingMetricsCollector(self.model_dir)
-        
-        # Initialize heatmap generator
-        self.heatmap_generator = UnifiedFeatureHeatmapGenerator(self.model_dir)
-        
-        # Use fixed test data for consistency
-        self.X_test_fixed, self.y_test_fixed = self.data_processor.get_fixed_test_data()
-        print(f"Using fixed test set with {len(self.X_test_fixed)} samples for all evaluations")
         
         self.enable_fusion_debug = config.get('enable_fusion_debug', True)
         self.max_debug_samples = config.get('max_debug_samples', 100)
         self.debug_sample_types = config.get('debug_sample_types', ['cnn_wrong_gru_right', 'both_wrong', 'cnn_right_gru_wrong'])
     
-    def _analyze_errors(self, y_true, cnn_pred, gru_pred, threshold=0.5):
+    def _analyze_errors(self, y_true, cnn_pred, gru_pred, fused_pred=None, threshold=0.5):
         y_true = y_true.astype(int)
-        cnn_pred_binary = (cnn_pred > threshold).astype(int)
-        gru_pred_binary = (gru_pred > threshold).astype(int)
+        cnn_binary = (cnn_pred > threshold).astype(int)
+        gru_binary = (gru_pred > threshold).astype(int)
         
-        cnn_errors = np.sum(cnn_pred_binary != y_true)
-        cnn_wrong_gru_right = np.sum((cnn_pred_binary != y_true) & (gru_pred_binary == y_true))
+        err_cnn = (cnn_binary != y_true).astype(int)
+        err_gru = (gru_binary != y_true).astype(int)
+        
+        cnn_errors = np.sum(err_cnn)
+        gru_errors = np.sum(err_gru)
+        
+        cnn_wrong_gru_right = np.sum((err_cnn == 1) & (err_gru == 0))
+        cnn_right_gru_wrong = np.sum((err_cnn == 0) & (err_gru == 1))
+        both_wrong = np.sum((err_cnn == 1) & (err_gru == 1))
+        both_correct = np.sum((err_cnn == 0) & (err_gru == 0))
+        
+        disagreement_mask = (err_cnn != err_gru)
+        disagreement_ratio = np.mean(disagreement_mask)
         ratio = cnn_wrong_gru_right / cnn_errors if cnn_errors > 0 else 0.0
+        
+        try:
+            from scipy.stats import pearsonr
+            error_correlation, _ = pearsonr(err_cnn, err_gru)
+        except Exception:
+            error_correlation = 0.0
+            
+        print("\n" + "="*60)
+        print(" 🔍 Complementarity & Conditional Fusion Analysis")
+        print("="*60)
+        print(f" Both Correct: {both_correct} | Both Wrong: {both_wrong} (Hard limits)")
+        print(f" CNN Only Wrong: {cnn_wrong_gru_right} | GRU Only Wrong: {cnn_right_gru_wrong}")
+        print(f" Disagreement Ratio: {disagreement_ratio:.2%} (Target > 5-10%)")
+        print(f" Error Correlation:  {error_correlation:.4f} (Target < 0.85)")
+        
+        if fused_pred is not None:
+            fused_binary = (fused_pred > threshold).astype(int)
+            fused_correct_mask = (fused_binary == y_true)
+            p_fusion_given_disagree = np.mean(fused_correct_mask[disagreement_mask]) if np.sum(disagreement_mask) > 0 else 0.0
+            p_fusion_given_cnn_w_gru_r = np.mean(fused_correct_mask[(err_cnn == 1) & (err_gru == 0)]) if cnn_wrong_gru_right > 0 else 0.0
+            
+            print("-" * 60)
+            print(f" P(Fusion Correct | Disagreement): {p_fusion_given_disagree:.2%}")
+            print(f" P(Fusion Correct | CNN Wrong, GRU Right): {p_fusion_given_cnn_w_gru_r:.2%}")
+            
+        print("="*60 + "\n")
         
         return {
             'cnn_total_errors': int(cnn_errors),
             'cnn_wrong_gru_right': int(cnn_wrong_gru_right),
-            'ratio': float(ratio)
+            'ratio': float(ratio), 
+            'error_correlation': float(error_correlation),
+            'disagreement_ratio': float(disagreement_ratio)
         }
     
-    def _collect_fusion_debug_samples(self, y_true, cnn_pred, gru_pred, fused_pred=None, gate_weights=None, threshold=0.5):
+    def _collect_fusion_debug_samples(self, y_true, cnn_pred, gru_pred, fused_pred=None, gate_info=None, threshold=0.5):
         if not self.enable_fusion_debug:
             return []
         
@@ -1636,7 +1042,6 @@ class RatioOptimizationTrainer:
         
         for sample_type in self.debug_sample_types:
             type_indices = np.where(sample_types[sample_type])[0]
-            
             max_samples_per_type = self.max_debug_samples // len(self.debug_sample_types)
             if len(type_indices) > max_samples_per_type:
                 type_indices = np.random.choice(type_indices, max_samples_per_type, replace=False)
@@ -1664,9 +1069,13 @@ class RatioOptimizationTrainer:
                     sample_info['fused_binary'] = int(fused_pred_binary[idx])
                     sample_info['fused_confidence'] = float(max(fused_pred[idx], 1 - fused_pred[idx]))
                 
-                if gate_weights is not None and idx < len(gate_weights):
-                    sample_info['cnn_gate_weight'] = float(gate_weights[idx][0])
-                    sample_info['gru_gate_weight'] = float(gate_weights[idx][1])
+                if gate_info is not None:
+                    if 'final_weights' in gate_info and idx < len(gate_info['final_weights']):
+                        sample_info['cnn_gate_weight'] = float(gate_info['final_weights'][idx][0])
+                        sample_info['gru_gate_weight'] = float(gate_info['final_weights'][idx][1])
+                    if 'instance_temps' in gate_info and idx < len(gate_info['instance_temps']):
+                        sample_info['cnn_temp'] = float(gate_info['instance_temps'][idx][0])
+                        sample_info['gru_temp'] = float(gate_info['instance_temps'][idx][1])
                 
                 debug_samples.append(sample_info)
         
@@ -1674,30 +1083,31 @@ class RatioOptimizationTrainer:
         return debug_samples
     
     def calculate_metrics(self, y_true, y_pred, threshold=0.5):
-        y_true = y_true.astype(int)
+        from sklearn.metrics import brier_score_loss
+        
+        y_true = np.array(y_true).astype(int).flatten()
+        y_pred = np.array(y_pred).flatten()
+        
         y_pred_binary = (y_pred > threshold).astype(int)
 
         precision = precision_score(y_true, y_pred_binary, zero_division=0)
-        recall = recall_score(y_true, y_pred_binary, zero_division=0)  # Sensitivity
+        recall = recall_score(y_true, y_pred_binary, zero_division=0)  
         accuracy = accuracy_score(y_true, y_pred_binary)
         f1 = f1_score(y_true, y_pred_binary, zero_division=0)
-        balanced_acc = balanced_accuracy_score(y_true, y_pred_binary)  # Balanced ACC
-        mcc = matthews_corrcoef(y_true, y_pred_binary)                 # MCC
+        balanced_acc = balanced_accuracy_score(y_true, y_pred_binary)  
+        mcc = matthews_corrcoef(y_true, y_pred_binary)                 
         
-        # AUC
         try:
             auc_roc = roc_auc_score(y_true, y_pred)
         except ValueError:
             auc_roc = 0.5
 
-        # PR-AUC
         try:
             precision_pr, recall_pr, _ = precision_recall_curve(y_true, y_pred)
             auc_pr = auc(recall_pr, precision_pr)
         except ValueError:
             auc_pr = 0.5
 
-        # Specificity 
         cm = confusion_matrix(y_true, y_pred_binary)
         if cm.shape == (2, 2):
             tn, fp, _, _ = cm.ravel()
@@ -1705,16 +1115,27 @@ class RatioOptimizationTrainer:
         else:
             specificity = 0.0
 
+        brier = brier_score_loss(y_true, y_pred)
+        
+        def expected_calibration_error(y_true_1d, y_prob_1d, n_bins=10):
+            ece = 0.0
+            bins = np.linspace(0., 1., n_bins + 1)
+            binned = np.digitize(y_prob_1d, bins) - 1
+            for b in range(n_bins):
+                mask = (binned == b)
+                if np.any(mask):
+                    acc = np.mean(y_true_1d[mask] == (y_prob_1d[mask] > 0.5))
+                    conf = np.mean(y_prob_1d[mask])
+                    ece += np.abs(acc - conf) * np.sum(mask) / len(y_true_1d)
+            return float(ece)
+            
+        ece = expected_calibration_error(y_true, y_pred)
+
         return {
-            'precision': float(precision),
-            'recall': float(recall),
-            'accuracy': float(accuracy),
-            'f1': float(f1),
-            'auc': float(auc_roc),
-            'balanced_accuracy': float(balanced_acc),
-            'mcc': float(mcc),
-            'auc_pr': float(auc_pr),
-            'specificity': float(specificity)
+            'precision': float(precision), 'recall': float(recall), 'accuracy': float(accuracy),
+            'f1': float(f1), 'auc': float(auc_roc), 'balanced_accuracy': float(balanced_acc),
+            'mcc': float(mcc), 'auc_pr': float(auc_pr), 'specificity': float(specificity),
+            'brier_score': float(brier), 'ece': float(ece) 
         }
     
     def _get_learning_rate_scheduler(self, model_name):
@@ -1804,100 +1225,14 @@ class RatioOptimizationTrainer:
     def train_final_model(self) -> None:
         print("Base train_final_model called - using traditional approach")
 
-
+from sklearn.model_selection import StratifiedKFold
+import numpy as np
+import os
+import time
 import tensorflow as tf
-from tensorflow.keras.callbacks import Callback
+import tensorflow.keras.callbacks as callbacks
+from tensorflow.keras.optimizers import Adam
 
-class DynamicTrainingCallback(Callback):
-    
-    def __init__(self, fusion_layer, config):
-        super().__init__()
-        self.fusion_layer = fusion_layer
-        self.config = config
-        self.training_epoch = tf.Variable(0, trainable=False, dtype=tf.int32)
-        
-
-        self.fusion_gate_weight_strategy = [
-            (5, (0.80, 0.15, 0.05)),    # stage1: epoch < 5, 
-            (15, (0.20, 0.50, 0.30)),   # stage2: 5 ≤ epoch < 15
-            (float('inf'), (0.05, 0.60, 0.35))  # stage3: epoch ≥ 15
-        ]
-        
-        print("\n" + "="*80)
-        print("fusion gate weight strategy:")
-        for i, (max_epoch, weights) in enumerate(self.fusion_gate_weight_strategy, 1):
-            epoch_range = f"epoch < {max_epoch}" if max_epoch != float('inf') else "epoch ≥ 15"
-            w_correct, w_conf, w_stats = weights
-            print(f"  Stage {i} ({epoch_range:15s}): correct={w_correct:.2f}, conf={w_conf:.2f}, stats={w_stats:.2f}")
-        print("="*80 + "\n")
-    
-    def _get_fusion_gate_weights_by_epoch(self, epoch):
-        for max_epoch, weights in self.fusion_gate_weight_strategy:
-            if epoch < max_epoch:
-                return weights
-        return self.fusion_gate_weight_strategy[-1][1] 
-
-    def _determine_stage(self, epoch):
-        if epoch < 5:
-            return 1, "Early Stage"
-        elif epoch < 15:
-            return 2, "Middle Stage"
-        else:
-            return 3, "Late Stage"
-    
-    def update_training_epoch(self, epoch):
-
-        self.training_epoch.assign(epoch)
-        
-        stage_num, stage_name = self._determine_stage(epoch)
-
-        w_correct, w_conf, w_stats = self._get_fusion_gate_weights_by_epoch(epoch)
-        
-        if self.fusion_layer is not None:
-            if hasattr(self.fusion_layer, 'training_epoch'):
-                self.fusion_layer.training_epoch.assign(epoch)
-            
-            try:
-                self.fusion_layer.w_correct.assign(w_correct)
-                self.fusion_layer.w_conf.assign(w_conf)
-                self.fusion_layer.w_stats.assign(w_stats)
-            except AttributeError as e:
-                print(f"Warning: {e}")
-
-        print("\n" + "="*80)
-        print(f" Epoch {epoch + 1} | Stage {stage_num}: {stage_name}")
-        print("-" * 40)
-        print("fusion gate weight:")
-        print(f"  ├─  (w_correct): {w_correct:.2f}")
-        print(f"  ├─  (w_conf):    {w_conf:.2f}")
-        print(f"  └─  (w_stats): {w_stats:.2f}")
-        
-        gate_sum = w_correct + w_conf + w_stats
-        print(f"      (weight sum: {gate_sum:.2f})")
-        print("="*80 + "\n")
-    
-    def on_epoch_begin(self, epoch, logs=None):
-        self.update_training_epoch(epoch)
-        
-        if epoch == 20:
-            lr = tf.keras.backend.get_value(self.model.optimizer.lr)
-            new_lr = lr * 0.75
-            tf.keras.backend.set_value(self.model.optimizer.lr, new_lr)
-            print(f" {lr:.6f} → {new_lr:.6f} (×0.75)\n")
-            
-        elif epoch == 35:
-            lr = tf.keras.backend.get_value(self.model.optimizer.lr)
-            new_lr = lr * 0.6
-            tf.keras.backend.set_value(self.model.optimizer.lr, new_lr)
-            print(f": {lr:.6f} → {new_lr:.6f} (×0.6)\n")
-    
-    def on_epoch_end(self, epoch, logs=None):
-        pass
-    
-    def get_config(self):
-        return {
-            'fusion_gate_weight_strategy': self.fusion_gate_weight_strategy
-        }
 from sklearn.model_selection import StratifiedKFold
 import numpy as np
 import os
@@ -1908,10 +1243,10 @@ from tensorflow.keras.optimizers import Adam
 
 class OptimizedRatioOptimizationTrainer(RatioOptimizationTrainer):
     
-    def __init__(self, config: Dict):
+    def __init__(self, config: dict):
         super().__init__(config)
         self.fusion_model = None
-        self.optimized_data_processor = OptimizedDataProcessor(config)
+        self.data_processor = DualStreamDataProcessor(config)
         self.model_names['gru'] = 'enhanced_gru'
         self.gru_ensemble_paths = [] 
         
@@ -1920,45 +1255,21 @@ class OptimizedRatioOptimizationTrainer(RatioOptimizationTrainer):
             'enhanced_gru': lambda shape: build_enhanced_gru(shape, self.config)
         }
         
-    def augment_data_for_gru(self, X, y, augmentation_factor=0.5):
-        if augmentation_factor <= 0: return X, y
-        augmented_X, augmented_y = [], []
-        np.random.seed(int(time.time() * 1000) % 10000)
-        
-        for i in range(len(X)):
-            if np.random.random() < augmentation_factor:
-                original = X[i].flatten()
-                aug_type = np.random.choice(['time_warp', 'noise', 'scale', 'shift', 'flip'])
-                if aug_type == 'time_warp' and len(original) > 10:
-                    stretch = np.random.uniform(0.85, 1.15)
-                    st = np.interp(np.linspace(0, len(original)-1, int(len(original)*stretch)), np.arange(len(original)), original)
-                    st = st[:len(original)] if len(st) > len(original) else np.pad(st, (0, len(original)-len(st)), 'constant')
-                    augmented_X.append(st.reshape(-1, 1)); augmented_y.append(y[i])
-                elif aug_type == 'noise':
-                    augmented_X.append((original + np.random.normal(0, np.std(original)*0.05, len(original))).reshape(-1, 1)); augmented_y.append(y[i])
-                elif aug_type == 'scale':
-                    augmented_X.append((original * np.random.uniform(0.9, 1.1)).reshape(-1, 1)); augmented_y.append(y[i])
-                elif aug_type == 'shift':
-                    augmented_X.append((original + np.random.uniform(-0.05, 0.05)*np.std(original)).reshape(-1, 1)); augmented_y.append(y[i])
-                elif aug_type == 'flip' and len(original) > 20:
-                    augmented_X.append(np.flip(original).reshape(-1, 1)); augmented_y.append(y[i])
-                    
-        if augmented_X:
-            X_c = np.vstack([X, np.array(augmented_X)])
-            y_c = np.hstack([y, np.array(augmented_y)])
-            idx = np.random.permutation(len(X_c))
-            return X_c[idx], y_c[idx]
+        self.X_cnn_test, self.X_gru_test, self.y_test_fixed = self.data_processor.get_fixed_test_data()
+
+    def augment_data_for_gru(self, X, y, augmentation_factor=0.0):
         return X, y
 
     def _get_learning_rate_scheduler(self, model_name):
         if model_name == 'enhanced_gru' or model_name == 'optimized_gru':
             def gru_sch(epoch, lr):
-                config_lr = self.config.get('gru_initial_lr', 0.0003)
-                initial_lr = 0.0003 if float(config_lr) > 0.0005 else float(config_lr)
-                warmup = 5
-                decay_start = 20 
-                decay_factor = 0.7 
-                min_lr = 1e-7 
+                initial_lr = float(self.config.get('gru_initial_lr', 0.0005))
+                sch_cfg = self.config.get('gru_lr_schedule', {})
+                warmup = sch_cfg.get('warmup_epochs', 5)
+                decay_start = sch_cfg.get('decay_start_epoch', 20)
+                decay_factor = sch_cfg.get('decay_factor', 0.8)
+                min_lr = sch_cfg.get('min_lr', 1e-6)
+                
                 if epoch < warmup: return initial_lr * (epoch + 1) / warmup
                 elif epoch < decay_start: return initial_lr
                 else: return max(initial_lr * (decay_factor ** ((epoch - decay_start) // 8)), min_lr)
@@ -1966,84 +1277,51 @@ class OptimizedRatioOptimizationTrainer(RatioOptimizationTrainer):
         else:
             initial_lr = self.config.get('learning_rate', 0.001)
             def cnn_sch(epoch, lr):
-                T = max(self.config.get('epochs', 50), self.config.get('final_epochs', 150))
+                T = max(self.config.get('epochs', 50), self.config.get('final_epochs', 50))
                 min_lr = initial_lr * 0.01
                 progress = min(epoch / T, 1.0)
                 return max(min_lr + (initial_lr - min_lr) * (1 - progress) * (1 + np.cos(np.pi * progress)) / 2, min_lr)
             return callbacks.LearningRateScheduler(cnn_sch, verbose=0)
 
-    def _calculate_auto_fusion_params(self, y_true, cnn_oof_pred):
-        print("\n" + "="*50)
-        print(" Auto-Tuning Fusion Parameters (Disagreement Expert)")
-        
-        y_true = np.array(y_true).flatten()
-        cnn_probs = cnn_oof_pred.flatten()
-        cnn_pred_binary = (cnn_probs > 0.5).astype(int)
-        
-        error_indices = np.where(y_true != cnn_pred_binary)[0]
-        
-        if len(error_indices) == 0:
-            print("   CNN OOF Accuracy is 100%! Using default params.")
-            return 0.5, 0.2
-            
-        error_probs = cnn_probs[error_indices]
-        
-        center = float(np.mean(error_probs))
-        sigma = float(np.std(error_probs))
-        
-        sigma = max(0.15, min(sigma * 1.5, 0.3)) 
-        center = max(0.2, min(center, 0.8))
-        
-        print(f"   Errors found: {len(error_indices)}/{len(y_true)}")
-        print(f"   Calculated Mean: {np.mean(error_probs):.4f}, Std: {np.std(error_probs):.4f}")
-        print(f"   Auto-Set Parameters -> Center: {center:.4f}, Sigma: {sigma:.4f}")
-        print("="*50 + "\n")
-        return center, sigma
-
-    def _build_and_save_fusion_model(self, cnn_model, gru_model, input_shape, params=None):
+    def _build_and_save_fusion_model(self, cnn_model, gru_model, cnn_shape, gru_shape):
         print("\nBuilding and saving enhanced fusion model...")
-
-        if params:
-            self.config['uncertainty_center'] = params[0]
-            self.config['uncertainty_sigma'] = params[1]
-            
         self.fusion_model = build_enhanced_fusion_model(
-            input_shape, self.config, cnn_model, gru_model
+            cnn_shape, gru_shape, self.config, cnn_model, gru_model
         )
         path = os.path.join(self.model_dir, "enhanced_fusion_model.keras")
         self.fusion_model.save(path)
         print(f"Enhanced fusion model saved to: {path}")
         return self.fusion_model
 
-    def _enhanced_fusion_predict(self, cnn_model, gru_model, X_data, override_gru_pred=None):
+    def _enhanced_fusion_predict(self, cnn_model, gru_model, X_cnn, X_gru, override_gru_pred=None):
         if self.fusion_model is None:
             path = os.path.join(self.model_dir, "trained_enhanced_fusion_model.keras")
             if not os.path.exists(path): path = os.path.join(self.model_dir, "enhanced_fusion_model.keras")
             try:
                 custom = {
-                    'ImprovedGatedFusionMechanism': ImprovedGatedFusionMechanism,
-                    'EnhancedGatedFusionMechanism': ImprovedGatedFusionMechanism,
+                    'EnhancedGatedFusionMechanism': EnhancedGatedFusionMechanism,
                     'get_robust_feature_layer': FeatureExtractorManager.get_robust_feature_layer,
                     'F1Metric': F1Metric
                 }
                 self.fusion_model = load_model(path, custom_objects=custom)
             except Exception as e:
                 print(f"Error loading fusion model: {e}")
-                if self.fusion_model is None: # Fallback
-                    self.fusion_model = build_enhanced_fusion_model(X_data.shape[1:], self.config, cnn_model, gru_model)
+                self.fusion_model = build_enhanced_fusion_model(X_cnn.shape[1:], X_gru.shape[1:], self.config, cnn_model, gru_model)
 
-        cnn_pred = cnn_model.predict(X_data, batch_size=256, verbose=0).flatten()
+        cnn_pred = cnn_model.predict(X_cnn, batch_size=256, verbose=0).flatten()
         if override_gru_pred is not None: gru_pred = override_gru_pred
-        else: gru_pred = gru_model.predict(X_data, batch_size=256, verbose=0).flatten()
+        else: gru_pred = gru_model.predict(X_gru, batch_size=256, verbose=0).flatten()
         
         fusion_outputs = self.fusion_model.predict(
-            [X_data, cnn_pred.reshape(-1,1), gru_pred.reshape(-1,1)],
+            [X_cnn, X_gru, cnn_pred.reshape(-1,1), gru_pred.reshape(-1, 1)],
             batch_size=256, verbose=0
         )
         
         if isinstance(fusion_outputs, list) and len(fusion_outputs) >= 4:
             return fusion_outputs[0].flatten(), cnn_pred, gru_pred, {
-                'final_weights': fusion_outputs[1], 'base_weights': fusion_outputs[2], 'confidence_adjustment': fusion_outputs[3]
+                'final_weights': fusion_outputs[1], 
+                'instance_temps': fusion_outputs[2], 
+                'confidence_adjustment': fusion_outputs[3]
             }
         else:
             return fusion_outputs.flatten(), cnn_pred, gru_pred, None
@@ -2066,8 +1344,25 @@ class OptimizedRatioOptimizationTrainer(RatioOptimizationTrainer):
     def _analyze_gate_weights(self, gate_info, y_true, cnn_pred, gru_pred):
         if not gate_info: return {}
         fw = gate_info['final_weights']
-        print(f"\n=== Gate === CNN: {np.mean(fw[:,0]):.3f}, GRU: {np.mean(fw[:,1]):.3f}")
-        return {'final_weights': {'cnn_mean': float(np.mean(fw[:,0])), 'gru_mean': float(np.mean(fw[:,1])), 'cnn_std': float(np.std(fw[:,0])), 'gru_std': float(np.std(fw[:,1]))}}
+        w_cnn, w_gru = fw[:, 0], fw[:, 1]
+        
+        print(f"\n=== Routing & Calibration Evaluation ===")
+        print(f"Overall Allocation - CNN: {np.mean(w_cnn):.3f} | GRU: {np.mean(w_gru):.3f}")
+        
+        cnn_correct = (cnn_pred > 0.5) == y_true
+        if np.sum(cnn_correct) > 0: print(f"Mean CNN Weight when CNN is CORRECT: {np.mean(w_cnn[cnn_correct]):.3f}")
+        if np.sum(~cnn_correct) > 0: print(f"Mean CNN Weight when CNN is WRONG  : {np.mean(w_cnn[~cnn_correct]):.3f}")
+        
+        if 'instance_temps' in gate_info:
+            temps = gate_info['instance_temps']
+            print(f"Mean Temperature   - CNN: {np.mean(temps[:, 0]):.3f} | GRU: {np.mean(temps[:, 1]):.3f}")
+            
+        return {
+            'final_weights': {
+                'cnn_mean': float(np.mean(w_cnn)), 'gru_mean': float(np.mean(w_gru)), 
+                'cnn_std': float(np.std(w_cnn)), 'gru_std': float(np.std(w_gru))
+            }
+        }
 
     def _analyze_cnn_reliability(self, y_true, cnn_pred_prob, num_bins=10):
         print("\n" + "="*60 + "\n CNN Reliability Analysis\n" + "-"*60)
@@ -2088,164 +1383,145 @@ class OptimizedRatioOptimizationTrainer(RatioOptimizationTrainer):
         except: print("⚠️ Pandas missing, skipping table.")
 
     def train_final_model(self):
-        data_info = self.optimized_data_processor.get_optimized_training_data()
-        self._train_with_cv_stacking(data_info)
+        X_cnn_all, X_gru_all, y_all = self.data_processor.get_dynamic_training_data()
+        self._train_with_cv_stacking(X_cnn_all, X_gru_all, y_all)
 
-    def _train_with_cv_stacking(self, data_info):
-            print("\n" + "="*60 + "\n🚀 Starting Hybrid CV Stacking (Auto-Tuned)\n" + "="*60)
-            
-            X_all, y_all = data_info['data']
-            n_folds = data_info['folds']
-            input_shape = X_all.shape[1:]
-            
-            if self.config.get('use_repeated_cv_stacking', True):
-                gru_bagging_runs = self.config.get('repeated_cv_runs', 3)
-                print(f"Strategy: Repeated CV Stacking Enabled (Runs: {gru_bagging_runs})")
-            else:
-                gru_bagging_runs = 1
-                print("Strategy: Repeated CV Stacking Disabled (Runs: 1)")
-            
-            self.metrics_collector.init_final_training(list(self.model_names.values()) + ['enhanced_fusion'])
-            oof_preds_cnn = np.zeros((len(X_all), 1))
-            oof_preds_gru = np.zeros((len(X_all), 1))
-            
-            skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
-            last_cnn, last_gru = None, None
-            
-            # === Phase 1: Hybrid CV ===
-            for fold, (train_idx, val_idx) in enumerate(skf.split(X_all, y_all)):
-                print(f"\n--- Processing Fold {fold+1}/{n_folds} ---")
-                X_train, y_train = X_all[train_idx], y_all[train_idx]
-                X_val, y_val = X_all[val_idx], y_all[val_idx]
-                
-                # 1. CNN (Single)
-                print("  Training CNN (Single)...")
-                cnn = self.model_builders['conv_basic'](input_shape)
-                cnn.fit(X_train, y_train, epochs=self.config['epochs'], batch_size=self.cnn_batch_size, verbose=0, callbacks=[callbacks.EarlyStopping(monitor='loss', patience=5)])
-                val_pred_cnn = cnn.predict(X_val, batch_size=256, verbose=0)
-                oof_preds_cnn[val_idx] = val_pred_cnn
-                print(f"  Fold {fold+1} CNN F1: {self.calculate_metrics(y_val, val_pred_cnn)['f1']:.4f}")
-                last_cnn = cnn
-                
-                # 2. GRU (Bagging or Single run)
-                print(f"  Training GRU ({gru_bagging_runs}x)...")
-                fold_gru_preds = []
-                for i in range(gru_bagging_runs):
-                    X_aug, y_aug = self.augment_data_for_gru(X_train, y_train)
-                    best_temp, best_f1 = None, -1.0
-                    for _ in range(2): 
-                        gru = self.model_builders['enhanced_gru'](input_shape)
-                        gru.fit(X_aug, y_aug, epochs=self.config['gru_epochs'], batch_size=32, verbose=0,
-                            callbacks=[self._get_learning_rate_scheduler('enhanced_gru'), callbacks.EarlyStopping(monitor='loss', patience=40)],
-                            class_weight=self.config.get('gru_class_weight'))
-                        f1 = self.calculate_metrics(y_val, gru.predict(X_val, verbose=0))['f1']
-                        if f1 > best_f1: best_temp, best_f1 = gru, f1
-                        if f1 > 0.6: break 
-                        else: 
-                            from tensorflow.keras import backend as K
-                            K.clear_session()
-                    
-                    fold_gru_preds.append(best_temp.predict(X_val, batch_size=256, verbose=0))
-                    if i == 0: last_gru = best_temp
-                    del gru, best_temp
-                    from tensorflow.keras import backend as K
-                    K.clear_session()
-                
-                avg_gru = np.mean(fold_gru_preds, axis=0)
-                oof_preds_gru[val_idx] = avg_gru
-                print(f"  Fold {fold+1} GRU Ensemble F1: {self.calculate_metrics(y_val, avg_gru)['f1']:.4f}")
-                
-                del cnn
-                from tensorflow.keras import backend as K
-                K.clear_session()
-
-            print("\n✅ Phase 1 Completed.")
-            
-            # === Auto-Tuning ===
-            auto_center, auto_sigma = self._calculate_auto_fusion_params(y_all, oof_preds_cnn)
-            
-            # === Phase 2: Fusion ===
-            print("\nPhase 2: Training Fusion Model...")
-            if last_cnn is None: last_cnn = self.model_builders['conv_basic'](input_shape)
-            if last_gru is None: last_gru = self.model_builders['enhanced_gru'](input_shape)
-
-            self._build_and_save_fusion_model(last_cnn, last_gru, input_shape, params=(auto_center, auto_sigma))
-            self.train_enhanced_fusion_model_cv(X_all, oof_preds_cnn, oof_preds_gru, y_all)
-            
-            # === Phase 3: Final Retrain ===
-            print("\nPhase 3: Final Retraining...")
-            final_models = {}
-            
-            # Retrain CNN
-            print("  Retraining Final CNN...")
-            final_cnn = self.model_builders['conv_basic'](input_shape)
-            final_cnn.fit(X_all, y_all, epochs=self.config['final_epochs'], batch_size=self.cnn_batch_size, verbose=1, validation_split=0.0,
-                        callbacks=[self._get_learning_rate_scheduler('conv_basic'), callbacks.EarlyStopping(monitor='loss', patience=15)])
-            final_cnn.save(os.path.join(self.model_dir, "conv_basic_final_model.keras"))
-            final_models['conv_basic'] = final_cnn
-            
-            # Retrain GRU Ensemble
-            print(f"  Retraining Final GRU ({gru_bagging_runs}x)...")
-            self.gru_ensemble_paths = []
-            for i in range(gru_bagging_runs):
-                print(f"    GRU Run {i+1}...")
-                X_aug, y_aug = self.augment_data_for_gru(X_all, y_all)
-                final_gru = self.model_builders['enhanced_gru'](input_shape)
-                final_gru.fit(X_aug, y_aug, epochs=self.config['gru_epochs'], batch_size=32, verbose=0,
-                            callbacks=[self._get_learning_rate_scheduler('enhanced_gru'), callbacks.EarlyStopping(monitor='loss', patience=40)],
-                            class_weight=self.config.get('gru_class_weight'))
-                path = os.path.join(self.model_dir, f"enhanced_gru_final_model_{i}.keras")
-                final_gru.save(path)
-                self.gru_ensemble_paths.append(path)
-                if i == 0: final_models['enhanced_gru'] = final_gru 
-                del final_gru
-                from tensorflow.keras import backend as K
-                K.clear_session()
-                
-            self.trained_models = final_models
-            self._evaluate_and_save_results(final_models)
-
-    def train_enhanced_fusion_model_cv(self, X_feat, cnn_preds, gru_preds, y_true):
-        fusion_layer = None
-        for layer in self.fusion_model.layers:
-            if isinstance(layer, ImprovedGatedFusionMechanism) or 'EnhancedGatedFusionMechanism' in str(type(layer)):
-                fusion_layer = layer; break
+    def _train_with_cv_stacking(self, X_cnn_all, X_gru_all, y_all):
+        print("\n" + "="*60 + "\n🚀 Starting Strict Holdout Meta-Learning (Dual-Stream)\n" + "="*60)
         
-        self.fusion_model.compile(
-            loss={'classification_output': 'binary_crossentropy'},
-            loss_weights={'classification_output': 1.0},
-            optimizer=Adam(
-                self.config.get('fusion_learning_rate', 0.0005),
-                clipnorm=1.0  
-            ),
-            metrics={'classification_output': ['accuracy', F1Metric(threshold=0.5, name='f1')]}
+        from sklearn.model_selection import train_test_split
+        indices = np.arange(len(y_all))
+        
+        idx_base, idx_meta = train_test_split(indices, test_size=0.20, stratify=y_all, random_state=42)
+        
+        idx_in_train, idx_in_val = train_test_split(idx_base, test_size=0.125, stratify=y_all[idx_base], random_state=42)
+        
+        X_c_tr, X_g_tr, y_tr = X_cnn_all[idx_in_train], X_gru_all[idx_in_train], y_all[idx_in_train]
+        X_c_val, X_g_val, y_val = X_cnn_all[idx_in_val], X_gru_all[idx_in_val], y_all[idx_in_val]
+        X_c_meta, X_g_meta, y_meta = X_cnn_all[idx_meta], X_gru_all[idx_meta], y_all[idx_meta]
+
+        cnn_shape = X_c_tr.shape[1:]
+        gru_shape = X_g_tr.shape[1:]
+        
+        print(f"Inner Train Set: {len(X_c_tr)} | Inner Val (for ES): {len(X_c_val)} | Meta-OOF Set: {len(X_c_meta)}")
+        self.metrics_collector.init_final_training(list(self.model_names.values()) + ['enhanced_fusion'])
+        
+        print("\n" + "-"*40 + "\n🤖 Training Canonical CNN Base Expert...\n" + "-" * 40)
+        cnn = self.model_builders['conv_basic'](cnn_shape)
+        cnn.fit(X_c_tr, y_tr, epochs=self.config['epochs'], batch_size=self.cnn_batch_size, verbose=1,
+                validation_data=(X_c_val, y_val), 
+                callbacks=[callbacks.EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True),
+                           self._get_learning_rate_scheduler('conv_basic')])
+                           
+        val_cnn_f1 = self.calculate_metrics(y_meta, cnn.predict(X_c_meta, batch_size=256, verbose=0).flatten())['f1']
+        print(f"✅ Canonical CNN Meta-OOF F1: {val_cnn_f1:.4f}")
+
+        cnn.save(os.path.join(self.model_dir, "conv_basic_final_model.keras"))
+
+        print("\n" + "-"*40 + "\n🧬 Training Canonical GRU Base Expert...\n" + "-" * 40)
+        gru = self.model_builders['enhanced_gru'](gru_shape)
+        gru_bs = self.config.get('gru_batch_size', 64)
+        
+        gru.fit(X_g_tr, y_tr, epochs=self.config.get('gru_epochs', 120), batch_size=gru_bs, verbose=1,
+                validation_data=(X_g_val, y_val), class_weight=self.config.get('gru_class_weight'),
+                callbacks=[callbacks.EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True),
+                           self._get_learning_rate_scheduler('enhanced_gru')])
+                           
+        val_gru_f1 = self.calculate_metrics(y_meta, gru.predict(X_g_meta, batch_size=256, verbose=0).flatten())['f1']
+        print(f"✅ Canonical GRU Meta-OOF F1: {val_gru_f1:.4f}")
+        
+        gru.save(os.path.join(self.model_dir, "enhanced_gru_final_model.keras"))
+
+        print("\n--- Extracting STRICT Canonical Meta Features ---")
+        cnn_feat_layer = FeatureExtractorManager.get_robust_feature_layer(cnn, 'cnn')
+        cnn_ext = Model(inputs=cnn.input, outputs=cnn_feat_layer)
+        oof_feats_cnn = cnn_ext.predict(X_c_meta, batch_size=256, verbose=0)
+        oof_preds_cnn = cnn.predict(X_c_meta, batch_size=256, verbose=0)
+        
+        gru_feat_layer = FeatureExtractorManager.get_robust_feature_layer(gru, 'gru')
+        gru_ext = Model(inputs=gru.input, outputs=gru_feat_layer)
+        oof_feats_gru = gru_ext.predict(X_g_meta, batch_size=256, verbose=0)
+        oof_preds_gru = gru.predict(X_g_meta, batch_size=256, verbose=0)
+        
+        print("\n--- Training Fusion Model on STRICT Canonical Meta Features ---")
+        self.train_enhanced_fusion_model_cv(oof_feats_cnn, oof_feats_gru, oof_preds_cnn, oof_preds_gru, y_meta)
+        
+        print("\n 🧩 Assembling End-to-End Fusion Model for Inference...")
+        final_models = {'conv_basic': cnn, 'enhanced_gru': gru}
+        self.fusion_model = self._assemble_e2e_fusion_model(cnn, gru, cnn_shape, gru_shape)
+        self.fusion_model.save(os.path.join(self.model_dir, "enhanced_fusion_model.keras"))
+        
+        self.trained_models = final_models
+        self.gru_ensemble_paths = []
+        self._evaluate_and_save_results(final_models)
+
+    def train_enhanced_fusion_model_cv(self, oof_feat_cnn, oof_feat_gru, cnn_preds, gru_preds, y_true):
+        self.trained_fusion_layer = EnhancedGatedFusionMechanism(
+            fusion_units=self.config.get('fusion_units', 16),
+            dropout_rate=self.config.get('fusion_dropout', 0.2),
+            gate_l2_reg=self.config.get('gate_l2_reg', 0.005)
+        )
+        in_c_feat = Input(shape=(oof_feat_cnn.shape[1],), name='in_c_feat')
+        in_g_feat = Input(shape=(oof_feat_gru.shape[1],), name='in_g_feat')
+        in_c_pred = Input(shape=(1,), name='in_c_pred')
+        in_g_pred = Input(shape=(1,), name='in_g_pred')
+        
+        outputs = self.trained_fusion_layer([in_c_feat, in_g_feat, in_c_pred, in_g_pred])
+        train_model = Model([in_c_feat, in_g_feat, in_c_pred, in_g_pred], outputs[0]) 
+        
+        train_model.compile(
+            loss='binary_crossentropy',
+            optimizer=Adam(self.config.get('fusion_learning_rate', 0.0003), clipnorm=1.0),
+            metrics=['accuracy', F1Metric(threshold=0.5, name='f1')]
         )
         
-        cnn_noisy = np.clip(cnn_preds + np.random.normal(0, 0.005, cnn_preds.shape), 0, 1)
-        gru_noisy = np.clip(gru_preds + np.random.normal(0, 0.005, gru_preds.shape), 0, 1)
+        from sklearn.model_selection import train_test_split
+        indices = np.arange(len(y_true))
+        train_idx, val_idx = train_test_split(indices, test_size=0.2, stratify=y_true, random_state=42)
         
-        hist = self.fusion_model.fit(
-            [X_feat, cnn_noisy, gru_noisy], {'classification_output': y_true},
+        hist = train_model.fit(
+            [oof_feat_cnn[train_idx], oof_feat_gru[train_idx], cnn_preds[train_idx], gru_preds[train_idx]], 
+            y_true[train_idx], 
             epochs=self.config.get('fusion_epochs', 50),
-            batch_size=16, 
-            validation_split=0.2, 
+            batch_size=self.config.get('fusion_batch_size', 64), 
+            validation_data=(
+                [oof_feat_cnn[val_idx], oof_feat_gru[val_idx], cnn_preds[val_idx], gru_preds[val_idx]],
+                y_true[val_idx]
+            ),
             verbose=1,
             callbacks=[
-                callbacks.EarlyStopping(monitor='val_classification_output_f1', mode='max', patience=6, restore_best_weights=True),
-                DynamicTrainingCallback(fusion_layer, self.config)
+                callbacks.EarlyStopping(monitor='val_loss', mode='min', patience=15, restore_best_weights=True),
+                callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, verbose=1, min_lr=1e-6)
             ]
         )
-        self.fusion_model.save(os.path.join(self.model_dir, "trained_enhanced_fusion_model.keras"))
-        fusion_train_preds = self.fusion_model.predict([X_feat, cnn_noisy, gru_noisy], verbose=0)
-        if isinstance(fusion_train_preds, list): 
-            fusion_train_preds = fusion_train_preds[0]
-            
-        learned_th, learned_f1 = self._search_optimal_threshold(y_true, fusion_train_preds.flatten())
-        self.learned_optimal_threshold = learned_th
-        
+        self.learned_optimal_threshold = 0.5 
         return hist
+
+    def _assemble_e2e_fusion_model(self, final_cnn, final_gru, cnn_shape, gru_shape):
+        in_cnn = Input(shape=cnn_shape, name='cnn_raw_inputs')
+        in_gru = Input(shape=gru_shape, name='gru_raw_inputs')
+        in_c_pred = Input(shape=(1,), name='cnn_pred_input')
+        in_g_pred = Input(shape=(1,), name='gru_pred_input')
         
-    def _search_optimal_threshold(self, y_true, y_pred_prob, start=0.30, end=0.70, step=0.01):
+        final_cnn.trainable = False
+        final_gru.trainable = False
+        
+        cnn_ext = Model(final_cnn.input, FeatureExtractorManager.get_robust_feature_layer(final_cnn, 'cnn'))
+        gru_ext = Model(final_gru.input, FeatureExtractorManager.get_robust_feature_layer(final_gru, 'gru'))
+        
+        cnn_features = cnn_ext(in_cnn)
+        gru_features = gru_ext(in_gru)
+        
+        outputs = self.trained_fusion_layer([cnn_features, gru_features, in_c_pred, in_g_pred])
+        
+        e2e_model = Model(
+            inputs=[in_cnn, in_gru, in_c_pred, in_g_pred],
+            outputs=[outputs[0], outputs[1], outputs[2], outputs[3]], 
+            name='enhanced_fusion_model'
+        )
+        return e2e_model
+        
+    def _search_optimal_threshold(self, y_true, y_pred_prob, start=0.40, end=0.60, step=0.01):
         best_th, best_f1 = 0.5, 0.0
         if np.all(np.isin(y_pred_prob, [0, 1])): return 0.5, f1_score(y_true, y_pred_prob)
         for thresh in np.arange(start, end + step, step):
@@ -2257,51 +1533,59 @@ class OptimizedRatioOptimizationTrainer(RatioOptimizationTrainer):
         y_pred = (y_prob > threshold).astype(int)
         tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
         spec = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+        
+        from sklearn.metrics import brier_score_loss
+        brier = brier_score_loss(y_true, y_prob)
+        
+        def expected_calibration_error(y_true_1d, y_prob_1d, n_bins=10):
+            ece = 0.0
+            bins = np.linspace(0., 1., n_bins + 1)
+            binned = np.digitize(y_prob_1d, bins) - 1
+            for b in range(n_bins):
+                mask = (binned == b)
+                if np.any(mask):
+                    acc = np.mean(y_true_1d[mask] == (y_prob_1d[mask] > 0.5))
+                    conf = np.mean(y_prob_1d[mask])
+                    ece += np.abs(acc - conf) * np.sum(mask) / len(y_true_1d)
+            return float(ece)
+            
+        ece = expected_calibration_error(y_true, y_prob)
+
         return {
             'accuracy': accuracy_score(y_true, y_pred), 'precision': precision_score(y_true, y_pred, zero_division=0),
             'recall': recall_score(y_true, y_pred, zero_division=0), 'f1': f1_score(y_true, y_pred, zero_division=0),
             'auc': roc_auc_score(y_true, y_prob), 'balanced_acc': balanced_accuracy_score(y_true, y_pred),
             'mcc': matthews_corrcoef(y_true, y_pred), 'auc_pr': average_precision_score(y_true, y_prob),
-            'specificity': spec, 'best_threshold': threshold
+            'specificity': spec, 'best_threshold': threshold,
+            'brier_score': float(brier), 'ece': float(ece) 
         }
 
     def _evaluate_and_save_results(self, models):
-
         final_predictions = {}
         optimal_model_metrics = {} 
         optimal_fusion_metrics = {}
         
-        print("\n" + "="*60 + "\n🚀 Executing Final Evaluation (Hybrid Strategy)\n" + "="*60)
+        print("\n" + "="*60 + "\n🚀 Executing Final Evaluation (Dual-Stream Strategy)\n" + "="*60)
 
-        cnn_prob = models['conv_basic'].predict(self.X_test_fixed, verbose=0).flatten()
+        cnn_prob = models['conv_basic'].predict(self.X_cnn_test, verbose=0).flatten()
         final_predictions['conv_basic'] = cnn_prob
         self._analyze_cnn_reliability(self.y_test_fixed, cnn_prob)
         
-        if hasattr(self, 'gru_ensemble_paths') and self.gru_ensemble_paths and self.config.get('use_repeated_cv_stacking', True):
-            print(f"  Ensembling {len(self.gru_ensemble_paths)} GRU models for inference...")
-            gru_list = []
-            for path in self.gru_ensemble_paths:
-                m = load_model(path, custom_objects={'F1Metric': F1Metric})
-                gru_list.append(m.predict(self.X_test_fixed, verbose=0).flatten())
-                del m
-                from tensorflow.keras import backend as K
-                K.clear_session()
-            gru_prob = np.mean(gru_list, axis=0)
-        else:
-            gru_prob = models['enhanced_gru'].predict(self.X_test_fixed, verbose=0).flatten()
+        gru_prob = models['enhanced_gru'].predict(self.X_gru_test, verbose=0).flatten()
         final_predictions['enhanced_gru'] = gru_prob
         
         raw_fused_prob, _, _, gate_info = self._enhanced_fusion_predict(
-            models['conv_basic'], models['enhanced_gru'], self.X_test_fixed, override_gru_pred=gru_prob
+            models['conv_basic'], models['enhanced_gru'], self.X_cnn_test, self.X_gru_test, override_gru_pred=gru_prob
         )
 
-        if self.config.get('use_confidence_locking', True):
+        if self.config.get('use_confidence_locking', False):
             lock_thresh = self.config.get('confidence_lock_threshold', 0.98)
+            print(f"  Applying Confidence Locking (Threshold: {lock_thresh})")
             locked_prob, lock_stats = self._apply_confidence_locking(
                 cnn_pred=cnn_prob, fused_pred=raw_fused_prob, y_true=self.y_test_fixed, lock_threshold=lock_thresh
             )
         else:
-            print("  Confidence Locking Disabled.")
+            print("  Confidence Locking explicitly disabled. Using pure dynamic gated fusion.")
             locked_prob = raw_fused_prob
             lock_stats = {'cnn_locked': 0, 'fusion_engaged': len(raw_fused_prob)}
             
@@ -2312,17 +1596,11 @@ class OptimizedRatioOptimizationTrainer(RatioOptimizationTrainer):
         print("-" * 60)
 
         for name, prob in targets:
-            if name != 'enhanced_fusion':
-                best_thr = 0.5
-            else:
-                if self.config.get('use_optimal_threshold', True):
-                    best_thr = getattr(self, 'learned_optimal_threshold', 0.5)
-                else:
-                    best_thr = 0.5
-            
+            best_thr = 0.5 
             metrics = self._calculate_full_metrics(self.y_test_fixed, prob, best_thr)
             if name == 'enhanced_fusion': optimal_fusion_metrics = metrics
             else: optimal_model_metrics[name] = metrics
+            print(f"{name:<20} | {best_thr:.2f}        | {metrics['f1']:.4f}     | {metrics['auc']:.4f}")
 
         gate_stats = self._analyze_gate_weights(gate_info, self.y_test_fixed, cnn_prob, gru_prob)
         self.metrics_collector.record_final_metrics(optimal_model_metrics, optimal_fusion_metrics)
@@ -2330,35 +1608,14 @@ class OptimizedRatioOptimizationTrainer(RatioOptimizationTrainer):
         self.metrics_collector.save_all_metrics()
 
         if self.config.get('generate_heatmaps', True):
-            print("\n" + "-"*40)
-            print("🎨 Generating Feature Heatmaps (De-biasing Analysis)...")
-            try:
-
-                import matplotlib
-                matplotlib.use('Agg')
-                
-                heatmap_gen = UnifiedFeatureHeatmapGenerator(self.model_dir)
-
-                heatmap_gen.generate_comparison_heatmaps(
-                    cnn_model=models['conv_basic'],
-                    gru_model=models['enhanced_gru'],
-                    X_samples=self.X_test_fixed,
-                    y_samples=self.y_test_fixed,
-                    method=self.config.get('heatmap_method', 'occlusion'), 
-                    max_total_samples=self.config.get('heatmap_max_total_samples', 10)
-                )
-                print("✅ Visualization completed successfully.")
-            except Exception as e:
-                print(f"⚠️ Heatmap generation skipped due to error: {e}")
-            print("-"*40 + "\n")
+            print("\n⚠️ Heatmap generation deferred (Currently does not support multi-input dual streams)")
 
     def _train_legacy_split(self, data_info): pass
 
     def _record_final_results_full(self, models, preds, m_metrics, e_metrics, gate, cnn_p, gru_p, fused_p, gate_s):
-        error_analysis = self._analyze_errors(self.y_test_fixed, cnn_p, gru_p)
+        error_analysis = self._analyze_errors(self.y_test_fixed, cnn_p, gru_p, fused_pred=fused_p)
         self.metrics_collector.record_final_error_analysis(error_analysis['cnn_total_errors'], error_analysis['cnn_wrong_gru_right'], error_analysis['ratio'])
-        
-        debug_samples = self._collect_fusion_debug_samples(self.y_test_fixed, cnn_p, gru_p, fused_p, gate['final_weights'] if gate else None)
+        debug_samples = self._collect_fusion_debug_samples(self.y_test_fixed, cnn_p, gru_p, fused_pred=fused_p, gate_info=gate)
         self.metrics_collector.record_final_fusion_debug_samples(debug_samples)
         
         cnn_f1 = m_metrics['conv_basic']['f1']
@@ -2375,7 +1632,7 @@ class OptimizedRatioOptimizationTrainer(RatioOptimizationTrainer):
         print("   CNN F1 (Default 0.5): {:.4f}".format(cnn_f1))
         print("   Enhanced GRU F1 (Default 0.5): {:.4f}".format(m_metrics['enhanced_gru']['f1']))
         print("   Enhanced fusion F1 (Optimal): {:.4f}".format(fusion_f1))
-
+        
 class OptimizedModelPredictor:
     
     def __init__(self, model_dir: str):
